@@ -44,6 +44,7 @@ You'll first need to start an interactive session, then load the module:
 sinteractive --mem=2g --cpus-per-task=2 --gres=lscratch:200
 
 # load the ccbrpipeliner module
+module purge
 module load ccbrpipeliner
 ```
 
@@ -154,6 +155,7 @@ Example of Tumor_Normal calling mode
 # Step 0: Set up
 
 sinteractive --mem=8g -N 1 -n 4
+module purge
 module load ccbrpipeliner # v8 
 
 # set up directories

@@ -5,6 +5,7 @@ TUMOR_BASE_NAME="TUMOR_1"
 NORMAL_BASE_NAME="NORMAL_1"
 
 # Purpose: Trim and quality-filter raw reads.
+module purge
 module load fastp
 mkdir -p results/fastp
 fastp -w 8 \
@@ -18,7 +19,10 @@ fastp -w 8 \
     --json results/fastp/${NORMAL_BASE_NAME}.fastp.json \
     --html results/fastp/${NORMAL_BASE_NAME}.fastp.html
 
+emailme
+
 # Purpose: Generate per-sample FastQC reports on trimmed reads.
+module purge
 module load fastqc
 mkdir -p results/qc/fastqc
 fastqc -t 8 -o results/qc/fastqc \
@@ -26,7 +30,10 @@ fastqc -t 8 -o results/qc/fastqc \
 fastqc -t 8 -o results/qc/fastqc \
     results/fastp/${NORMAL_BASE_NAME}.R1.trimmed.fastq.gz results/fastp/${NORMAL_BASE_NAME}.R2.trimmed.fastq.gz
 
+emailme
+
 # Purpose: Screen trimmed reads for contaminant genomes.
+module purge
 module load fastq_screen bowtie2
 mkdir -p results/qc/fastq_screen
 fastq_screen --conf ../conf/fastq_screen.conf \
@@ -44,7 +51,10 @@ fastq_screen --conf ../conf/fastq_screen.conf \
     --force \
     results/fastp/${NORMAL_BASE_NAME}.R1.trimmed.fastq.gz results/fastp/${NORMAL_BASE_NAME}.R2.trimmed.fastq.gz
 
+emailme
+
 # Purpose: Classify reads taxonomically and build Krona summaries.
+module purge
 module load kraken kronatools
 mkdir -p results/qc/kraken
 kraken2 --db /data/CCBR_Pipeliner/Pipelines/XAVIER/resources/hg38/kraken/20180907_standard_kraken2 \
@@ -62,7 +72,10 @@ kraken2 --db /data/CCBR_Pipeliner/Pipelines/XAVIER/resources/hg38/kraken/2018090
 cut -f2,3 results/qc/kraken/${NORMAL_BASE_NAME}.trimmed.kraken_bacteria.taxa.txt | \
     ktImportTaxonomy - -o results/qc/kraken/${NORMAL_BASE_NAME}.trimmed.kraken_bacteria.krona.html
 
+emailme
+
 # Purpose: Align reads, mark duplicates, sort BAM, and write indexes.
+module purge
 module load bwa-mem2 samblaster samtools
 mkdir -p results/align
 mkdir -p /tmp/logan_simple/bwa_${TUMOR_BASE_NAME}
@@ -88,7 +101,10 @@ samtools sort -T /tmp/logan_simple/bwa_${NORMAL_BASE_NAME}/ \
     -@ 8 -m 2G - \
     --write-index -o results/align/${NORMAL_BASE_NAME}.bam##idx##results/align/${NORMAL_BASE_NAME}.bam.bai
 
+emailme
+
 # Purpose: Build base quality recalibration tables.
+module purge
 module load GATK
 mkdir -p results/bqsr
 gatk --java-options '-Xmx10g' BaseRecalibrator \
@@ -108,7 +124,10 @@ gatk --java-options '-Xmx10g' BaseRecalibrator \
     --intervals /data/CCBR_Pipeliner/Pipelines/LOGAN/resources/hg38/resources_broad_hg38_v0_wgs_calling_regions.hg38.interval_list \
     --output results/bqsr/${NORMAL_BASE_NAME}.recal_data.grp
 
+emailme
+
 # Purpose: Apply BQSR and index recalibrated BAMs.
+module purge
 module load GATK samtools
 gatk --java-options '-Xmx20g' ApplyBQSR \
     --reference /data/CCBR_Pipeliner/Pipelines/XAVIER/resources/hg38/bwamem2/GRCh38.d1.vd1.fa \
@@ -127,13 +146,19 @@ gatk --java-options '-Xmx20g' ApplyBQSR \
     --use-jdk-deflater
 samtools index -@ 8 results/align/${NORMAL_BASE_NAME}.bqsr.bam results/align/${NORMAL_BASE_NAME}.bqsr.bam.bai
 
+emailme
+
 # Purpose: Summarize alignment metrics with flagstat.
+module purge
 module load samtools
 mkdir -p results/qc/align
 samtools flagstat results/align/${TUMOR_BASE_NAME}.bqsr.bam > results/qc/align/${TUMOR_BASE_NAME}.samtools_flagstat.txt
 samtools flagstat results/align/${NORMAL_BASE_NAME}.bqsr.bam > results/qc/align/${NORMAL_BASE_NAME}.samtools_flagstat.txt
 
+emailme
+
 # Purpose: Estimate coverage distribution across the genome.
+module purge
 module load mosdepth
 mkdir -p results/qc/align
 mosdepth -n --fast-mode --by 500 results/qc/align/${TUMOR_BASE_NAME} results/align/${TUMOR_BASE_NAME}.bqsr.bam -t 8
@@ -147,7 +172,10 @@ mv results/qc/align/${NORMAL_BASE_NAME}.mosdepth.summary.txt results/qc/align/${
 mv results/qc/align/${NORMAL_BASE_NAME}.regions.bed.gz results/qc/align/${NORMAL_BASE_NAME}.regions.bed.gz
 mv results/qc/align/${NORMAL_BASE_NAME}.regions.bed.gz.csi results/qc/align/${NORMAL_BASE_NAME}.regions.bed.gz.csi
 
+emailme
+
 # Purpose: Generate Qualimap alignment QC reports.
+module purge
 module load qualimap
 mkdir -p results/qc/align
 unset DISPLAY
@@ -172,7 +200,10 @@ qualimap bamqc -bam results/align/${NORMAL_BASE_NAME}.bqsr.bam \
 mv results/qc/align/${NORMAL_BASE_NAME}/genome_results.txt results/qc/align/${NORMAL_BASE_NAME}_genome_results.txt
 mv results/qc/align/${NORMAL_BASE_NAME}/qualimapReport.html results/qc/align/${NORMAL_BASE_NAME}_qualimapReport.html
 
+emailme
+
 # Purpose: Call somatic SNVs/indels with Mutect2.
+module purge
 module load GATK
 mkdir -p results/snv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/mutect2
 gatk Mutect2 \
@@ -188,7 +219,10 @@ gatk Mutect2 \
     --f1r2-tar-gz results/snv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/mutect2/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}.f1r2.tar.gz \
     --independent-mates
 
+emailme
+
 # Purpose: Collect pileups for contamination estimation.
+module purge
 module load GATK
 mkdir -p results/snv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/mutect2
 gatk --java-options -Xmx48g GetPileupSummaries \
@@ -202,7 +236,10 @@ gatk --java-options -Xmx48g GetPileupSummaries \
     --intervals /data/CCBR_Pipeliner/Pipelines/LOGAN/resources/hg38/resources_broad_hg38_v0_wgs_calling_regions.hg38.interval_list \
     -O results/snv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/mutect2/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}.npileup.table
 
+emailme
+
 # Purpose: Aggregate pileups and compute contamination.
+module purge
 module load GATK
 mkdir -p results/snv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/mutect2
 gatk GatherPileupSummaries \
@@ -221,21 +258,30 @@ gatk CalculateContamination \
     -I results/snv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/mutect2/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}.normal.allpileups.table \
     -O results/snv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/mutect2/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}.normal.contamination.table
 
+emailme
+
 # Purpose: Learn read-orientation bias model for filtering.
+module purge
 module load GATK
 mkdir -p results/snv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/mutect2
 gatk LearnReadOrientationModel \
     --output results/snv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/mutect2/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}.read-orientation-model.tar.gz \
     --input results/snv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/mutect2/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}.f1r2.tar.gz
 
+emailme
+
 # Purpose: Merge Mutect2 stats for downstream filtering.
+module purge
 module load GATK
 mkdir -p results/snv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/mutect2
 gatk MergeMutectStats \
     --stats results/snv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/mutect2/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}.mutect2.vcf.gz.stats \
     -O results/snv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/mutect2/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}.final.stats
 
+emailme
+
 # Purpose: Filter somatic calls and keep passing variants.
+module purge
 module load GATK
 mkdir -p results/snv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/mutect2
 gatk SortVcf \
@@ -255,7 +301,10 @@ gatk SelectVariants \
     --exclude-filtered \
     --output results/snv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/mutect2/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}.mutect2.final.vcf.gz
 
+emailme
+
 # Purpose: Normalize VCF representation and create an index.
+module purge
 module load bcftools
 bcftools sort results/snv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/mutect2/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}.mutect2.final.vcf.gz | \
     bcftools norm --threads 8 --check-ref s \
@@ -265,7 +314,10 @@ bcftools sort results/snv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/mutect2/${TU
     bcftools view - -Oz -o results/snv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/mutect2/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}.mutect2.norm.vcf.gz
 bcftools index -t results/snv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/mutect2/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}.mutect2.norm.vcf.gz
 
+emailme
+
 # Purpose: Call somatic structural variants with Manta.
+module purge
 module load manta
 mkdir -p results/sv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/manta/run
 configManta.py \
@@ -279,7 +331,10 @@ cp results/sv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/manta/run/results/varian
 cp results/sv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/manta/run/results/variants/somaticSV.vcf.gz.tbi \
     results/sv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/manta/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}.somaticSV.vcf.gz.tbi
 
+emailme
+
 # Purpose: Call copy-number alterations with CNVkit.
+module purge
 module load cnvkit
 mkdir -p results/cnv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/cnvkit
 cnvkit.py batch \
@@ -292,7 +347,10 @@ cnvkit.py batch \
 cp results/cnv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/cnvkit/${TUMOR_BASE_NAME}.bqsr.cns \
     results/cnv/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}/cnvkit/${TUMOR_BASE_NAME}_vs_${NORMAL_BASE_NAME}.cns
 
+emailme
+
 # Purpose: Aggregate QC metrics and reports across the run.
+module purge
 module load multiqc
 mkdir -p results/multiqc
 multiqc results -o results/multiqc
