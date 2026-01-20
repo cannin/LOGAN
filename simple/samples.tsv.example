@@ -1,0 +1,3 @@
+sample	r1	r2
+TUMOR_1	/data/fastq/TUMOR_1_R1.fastq.gz	/data/fastq/TUMOR_1_R2.fastq.gz
+NORMAL_1	/data/fastq/NORMAL_1_R1.fastq.gz	/data/fastq/NORMAL_1_R2.fastq.gz

@@ -1,0 +1,752 @@
+import csv
+
+configfile: "config.yaml"
+
+shell.executable("/bin/bash")
+shell.prefix("set -euo pipefail; ")
+
+OUTDIR = config["project"]["outdir"]
+THREADS = int(config["project"].get("threads", 8))
+TMPDIR = config["project"].get("tmpdir", "/tmp")
+
+ENABLE_QC = bool(config["enable"].get("qc", True))
+ENABLE_GERMLINE = bool(config["enable"].get("germline", False))
+ENABLE_SOMATIC = bool(config["enable"].get("somatic", True))
+ENABLE_SV = bool(config["enable"].get("sv", True))
+ENABLE_CNV = bool(config["enable"].get("cnv", True))
+ENABLE_ANNOTATION = bool(config["enable"].get("annotation", False))
+
+FASTP_DIR = f"{OUTDIR}/fastp"
+ALIGN_DIR = f"{OUTDIR}/align"
+BQS_DIR = f"{OUTDIR}/bqsr"
+QC_DIR = f"{OUTDIR}/qc"
+SNV_DIR = f"{OUTDIR}/snv"
+SV_DIR = f"{OUTDIR}/sv"
+CNV_DIR = f"{OUTDIR}/cnv"
+ANNOT_DIR = f"{OUTDIR}/annotation"
+MULTIQC_DIR = f"{OUTDIR}/multiqc"
+
+REF = config["reference"]["genome_fasta"]
+REF_DICT = config["reference"]["genome_dict"]
+KNOWN_SITES = config["reference"].get("known_sites", [])
+DBSNP = config["reference"].get("dbsnp", "")
+INTERVALS = config["reference"].get("intervals", "")
+GERMLINE_RESOURCE = config["reference"].get("germline_resource", "")
+PON = config["reference"].get("panel_of_normals", "")
+FASTQ_SCREEN_CONF = config["reference"].get("fastq_screen_conf", "")
+KRAKEN_DB = config["reference"].get("kraken_db", "")
+CNVKIT_ACCESS = config["reference"].get("cnvkit_access", "")
+VEP_CACHE = config["reference"].get("vep_cache", "")
+VEP_SPECIES = config["reference"].get("vep_species", "")
+VEP_BUILD = config["reference"].get("vep_build", "")
+
+DEEPVARIANT_RUN = config["tools"].get("deepvariant_run", "")
+VCF2MAF = config["tools"].get("vcf2maf", "")
+MANTA_CONFIG = config["tools"].get("manta_config", "")
+MULTIQC_BIN = config["tools"].get("multiqc", "multiqc")
+
+
+def read_tsv(path, required_columns):
+    """Read a TSV file and validate required columns.
+
+    Args:
+        path: TSV path to read.
+        required_columns: List of required column names.
+
+    Returns:
+        List of row dictionaries.
+    """
+    with open(path, "r", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        rows = [row for row in reader]
+
+    if not rows:
+        raise ValueError(f"No rows found in {path}")
+
+    missing = [col for col in required_columns if col not in rows[0]]
+    if missing:
+        missing_str = ", ".join(missing)
+        raise ValueError(f"Missing columns in {path}: {missing_str}")
+
+    return rows
+
+
+fastq_rows = read_tsv(config["samples"]["fastq_table"], ["sample", "r1", "r2"])
+SAMPLES = {row["sample"]: {"r1": row["r1"], "r2": row["r2"]} for row in fastq_rows}
+SAMPLE_LIST = sorted(SAMPLES.keys())
+
+pair_rows = read_tsv(config["samples"]["pair_table"], ["tumor", "normal"])
+PAIRS = [(row["tumor"], row["normal"]) for row in pair_rows]
+PAIR_IDS = [f"{tumor}_vs_{normal}" for tumor, normal in PAIRS]
+PAIR_TO_TUMOR = {f"{tumor}_vs_{normal}": tumor for tumor, normal in PAIRS}
+PAIR_TO_NORMAL = {f"{tumor}_vs_{normal}": normal for tumor, normal in PAIRS}
+NORMAL_SAMPLES = sorted({normal for _, normal in PAIRS})
+
+KNOWN_SITES_ARGS = " ".join([f"--known-sites {path}" for path in KNOWN_SITES])
+INTERVALS_ARG = f"--intervals {INTERVALS}" if INTERVALS else ""
+GERMLINE_RESOURCE_ARG = f"--germline-resource {GERMLINE_RESOURCE}" if GERMLINE_RESOURCE else ""
+PON_ARG = f"--panel-of-normals {PON}" if PON else ""
+
+
+def sample_fastqs(sample):
+    """Return R1/R2 paths for a sample.
+
+    Args:
+        sample: Sample identifier.
+
+    Returns:
+        Tuple of (r1, r2) FASTQ paths.
+    """
+    return SAMPLES[sample]["r1"], SAMPLES[sample]["r2"]
+
+
+def tumor_from_pair(wildcards):
+    """Resolve tumor sample name from a pair wildcard.
+
+    Args:
+        wildcards: Snakemake wildcards object with pair key.
+
+    Returns:
+        Tumor sample name.
+    """
+    return PAIR_TO_TUMOR[wildcards.pair]
+
+
+def normal_from_pair(wildcards):
+    """Resolve normal sample name from a pair wildcard.
+
+    Args:
+        wildcards: Snakemake wildcards object with pair key.
+
+    Returns:
+        Normal sample name.
+    """
+    return PAIR_TO_NORMAL[wildcards.pair]
+
+
+def maybe(condition, items):
+    """Return items if condition is truthy, else an empty list.
+
+    Args:
+        condition: Boolean condition.
+        items: List of items to return if condition is true.
+
+    Returns:
+        List of items or empty list.
+    """
+    return items if condition else []
+
+def cnvkit_prefix(wildcards):
+    """Return CNVkit output prefix for a tumor sample.
+
+    Args:
+        wildcards: Snakemake wildcards object with pair key.
+
+    Returns:
+        CNVkit output prefix string.
+    """
+    return f"{tumor_from_pair(wildcards)}.bqsr"
+
+
+rule all:
+    input:
+        expand(f"{ALIGN_DIR}/{{sample}}.bqsr.bam", sample=SAMPLE_LIST),
+        expand(f"{ALIGN_DIR}/{{sample}}.bqsr.bam.bai", sample=SAMPLE_LIST),
+        *maybe(
+            ENABLE_GERMLINE,
+            expand(f"{SNV_DIR}/germline/{{sample}}.deepvariant.vcf.gz", sample=NORMAL_SAMPLES),
+        ),
+        *maybe(
+            ENABLE_SOMATIC,
+            expand(
+                f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.mutect2.norm.vcf.gz",
+                pair=PAIR_IDS,
+            ),
+        ),
+        *maybe(
+            ENABLE_SV,
+            expand(
+                f"{SV_DIR}/{{pair}}/manta/{{pair}}.somaticSV.vcf.gz",
+                pair=PAIR_IDS,
+            ),
+        ),
+        *maybe(
+            ENABLE_CNV,
+            expand(
+                f"{CNV_DIR}/{{pair}}/cnvkit/{{pair}}.cns",
+                pair=PAIR_IDS,
+            ),
+        ),
+        *maybe(
+            ENABLE_ANNOTATION and ENABLE_SOMATIC,
+            expand(
+                f"{ANNOT_DIR}/{{pair}}/mutect2/{{pair}}.maf",
+                pair=PAIR_IDS,
+            ),
+        ),
+        *maybe(
+            ENABLE_QC,
+            [f"{MULTIQC_DIR}/multiqc_report.html"],
+        )
+
+
+rule fastp:
+    input:
+        r1=lambda wc: sample_fastqs(wc.sample)[0],
+        r2=lambda wc: sample_fastqs(wc.sample)[1],
+    output:
+        r1=f"{FASTP_DIR}/{{sample}}.R1.trimmed.fastq.gz",
+        r2=f"{FASTP_DIR}/{{sample}}.R2.trimmed.fastq.gz",
+        json=f"{FASTP_DIR}/{{sample}}.fastp.json",
+        html=f"{FASTP_DIR}/{{sample}}.fastp.html",
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {FASTP_DIR}
+        fastp -w {threads} \
+            -i {input.r1} -I {input.r2} \
+            -o {output.r1} -O {output.r2} \
+            --json {output.json} \
+            --html {output.html}
+        """
+
+
+rule fastqc_trimmed:
+    input:
+        r1=f"{FASTP_DIR}/{{sample}}.R1.trimmed.fastq.gz",
+        r2=f"{FASTP_DIR}/{{sample}}.R2.trimmed.fastq.gz",
+    output:
+        r1_zip=f"{QC_DIR}/fastqc/{{sample}}.R1.trimmed_fastqc.zip",
+        r1_html=f"{QC_DIR}/fastqc/{{sample}}.R1.trimmed_fastqc.html",
+        r2_zip=f"{QC_DIR}/fastqc/{{sample}}.R2.trimmed_fastqc.zip",
+        r2_html=f"{QC_DIR}/fastqc/{{sample}}.R2.trimmed_fastqc.html",
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {QC_DIR}/fastqc
+        fastqc -t {threads} -o {QC_DIR}/fastqc {input.r1} {input.r2}
+        """
+
+
+rule fastq_screen:
+    input:
+        r1=f"{FASTP_DIR}/{{sample}}.R1.trimmed.fastq.gz",
+        r2=f"{FASTP_DIR}/{{sample}}.R2.trimmed.fastq.gz",
+    output:
+        r1_html=f"{QC_DIR}/fastq_screen/{{sample}}.R1.trimmed_screen.html",
+        r1_png=f"{QC_DIR}/fastq_screen/{{sample}}.R1.trimmed_screen.png",
+        r1_txt=f"{QC_DIR}/fastq_screen/{{sample}}.R1.trimmed_screen.txt",
+        r2_html=f"{QC_DIR}/fastq_screen/{{sample}}.R2.trimmed_screen.html",
+        r2_png=f"{QC_DIR}/fastq_screen/{{sample}}.R2.trimmed_screen.png",
+        r2_txt=f"{QC_DIR}/fastq_screen/{{sample}}.R2.trimmed_screen.txt",
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {QC_DIR}/fastq_screen
+        fastq_screen --conf {FASTQ_SCREEN_CONF} \
+            --outdir {QC_DIR}/fastq_screen \
+            --threads {threads} \
+            --subset 1000000 \
+            --aligner bowtie2 \
+            --force \
+            {input.r1} {input.r2}
+        """
+
+
+rule kraken2:
+    input:
+        r1=f"{FASTP_DIR}/{{sample}}.R1.trimmed.fastq.gz",
+        r2=f"{FASTP_DIR}/{{sample}}.R2.trimmed.fastq.gz",
+    output:
+        report=f"{QC_DIR}/kraken/{{sample}}.trimmed.kraken_bacteria.taxa.txt",
+        krona=f"{QC_DIR}/kraken/{{sample}}.trimmed.kraken_bacteria.krona.html",
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {QC_DIR}/kraken
+        kraken2 --db {KRAKEN_DB} \
+            --threads {threads} --report {output.report} \
+            --output - \
+            --gzip-compressed \
+            --paired {input.r1} {input.r2}
+        cut -f2,3 {output.report} | \
+            ktImportTaxonomy - -o {output.krona}
+        """
+
+
+rule bwa_mem2_align:
+    input:
+        r1=f"{FASTP_DIR}/{{sample}}.R1.trimmed.fastq.gz",
+        r2=f"{FASTP_DIR}/{{sample}}.R2.trimmed.fastq.gz",
+    output:
+        bam=f"{ALIGN_DIR}/{{sample}}.bam",
+        bai=f"{ALIGN_DIR}/{{sample}}.bam.bai",
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {ALIGN_DIR}
+        if lscpu | grep -q avx2; then
+            BWA_BINARY="bwa-mem2.avx2"
+        elif lscpu | grep -q sse4_1; then
+            BWA_BINARY="bwa-mem2.sse41"
+        else
+            BWA_BINARY="bwa-mem2"
+        fi
+
+        mkdir -p {TMPDIR}/bwa_{wildcards.sample}
+        $BWA_BINARY mem -M \
+            -R '@RG\\tID:{wildcards.sample}\\tSM:{wildcards.sample}\\tPL:illumina\\tLB:{wildcards.sample}\\tPU:{wildcards.sample}\\tDS:wgs' \
+            -t {threads} \
+            {REF} \
+            {input.r1} {input.r2} | \
+        samblaster -M | \
+        samtools sort -T {TMPDIR}/bwa_{wildcards.sample}/ \
+            -@ {threads} -m 2G - \
+            --write-index -o {output.bam}##idx##{output.bai}
+        """
+
+
+rule bqsr_table:
+    input:
+        bam=f"{ALIGN_DIR}/{{sample}}.bam",
+        bai=f"{ALIGN_DIR}/{{sample}}.bam.bai",
+    output:
+        table=f"{BQS_DIR}/{{sample}}.recal_data.grp",
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {BQS_DIR}
+        gatk --java-options '-Xmx10g' BaseRecalibrator \
+            --input {input.bam} \
+            --reference {REF} \
+            {KNOWN_SITES_ARGS} \
+            {INTERVALS_ARG} \
+            --output {output.table}
+        """
+
+
+rule apply_bqsr:
+    input:
+        bam=f"{ALIGN_DIR}/{{sample}}.bam",
+        bai=f"{ALIGN_DIR}/{{sample}}.bam.bai",
+        table=f"{BQS_DIR}/{{sample}}.recal_data.grp",
+    output:
+        bam=f"{ALIGN_DIR}/{{sample}}.bqsr.bam",
+        bai=f"{ALIGN_DIR}/{{sample}}.bqsr.bam.bai",
+    threads: THREADS
+    shell:
+        """
+        gatk --java-options '-Xmx20g' ApplyBQSR \
+            --reference {REF} \
+            --input {input.bam} \
+            --bqsr-recal-file {input.table} \
+            --output {output.bam} \
+            --use-jdk-inflater \
+            --use-jdk-deflater
+        samtools index -@ {threads} {output.bam} {output.bai}
+        """
+
+
+rule samtools_flagstat:
+    input:
+        bam=f"{ALIGN_DIR}/{{sample}}.bqsr.bam",
+        bai=f"{ALIGN_DIR}/{{sample}}.bqsr.bam.bai",
+    output:
+        f"{QC_DIR}/align/{{sample}}.samtools_flagstat.txt",
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {QC_DIR}/align
+        samtools flagstat {input.bam} > {output}
+        """
+
+
+rule mosdepth:
+    input:
+        bam=f"{ALIGN_DIR}/{{sample}}.bqsr.bam",
+        bai=f"{ALIGN_DIR}/{{sample}}.bqsr.bam.bai",
+    output:
+        region=f"{QC_DIR}/align/{{sample}}.mosdepth.region.dist.txt",
+        summary=f"{QC_DIR}/align/{{sample}}.mosdepth.summary.txt",
+        regions=f"{QC_DIR}/align/{{sample}}.regions.bed.gz",
+        regions_csi=f"{QC_DIR}/align/{{sample}}.regions.bed.gz.csi",
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {QC_DIR}/align
+        mosdepth -n --fast-mode --by 500 {QC_DIR}/align/{wildcards.sample} {input.bam} -t {threads}
+        mv {QC_DIR}/align/{wildcards.sample}.mosdepth.region.dist.txt {output.region}
+        mv {QC_DIR}/align/{wildcards.sample}.mosdepth.summary.txt {output.summary}
+        mv {QC_DIR}/align/{wildcards.sample}.regions.bed.gz {output.regions}
+        mv {QC_DIR}/align/{wildcards.sample}.regions.bed.gz.csi {output.regions_csi}
+        """
+
+
+rule qualimap:
+    input:
+        bam=f"{ALIGN_DIR}/{{sample}}.bqsr.bam",
+        bai=f"{ALIGN_DIR}/{{sample}}.bqsr.bam.bai",
+    output:
+        results=f"{QC_DIR}/align/{{sample}}_genome_results.txt",
+        html=f"{QC_DIR}/align/{{sample}}_qualimapReport.html",
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {QC_DIR}/align
+        unset DISPLAY
+        qualimap bamqc -bam {input.bam} \
+            --java-mem-size=96G \
+            -c -ip \
+            -outdir {QC_DIR}/align/{wildcards.sample} \
+            -outformat HTML \
+            -nt {threads} \
+            -nw 500 \
+            -p NON-STRAND-SPECIFIC
+        mv {QC_DIR}/align/{wildcards.sample}/genome_results.txt {output.results}
+        mv {QC_DIR}/align/{wildcards.sample}/qualimapReport.html {output.html}
+        """
+
+
+rule deepvariant:
+    input:
+        bam=lambda wc: f"{ALIGN_DIR}/{wc.sample}.bqsr.bam",
+        bai=lambda wc: f"{ALIGN_DIR}/{wc.sample}.bqsr.bam.bai",
+    output:
+        vcf=f"{SNV_DIR}/germline/{{sample}}.deepvariant.vcf.gz",
+        gvcf=f"{SNV_DIR}/germline/{{sample}}.deepvariant.g.vcf.gz",
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {SNV_DIR}/germline
+        {DEEPVARIANT_RUN} \
+            --model_type=WGS \
+            --ref {REF} \
+            --reads {input.bam} \
+            --output_vcf {output.vcf} \
+            --output_gvcf {output.gvcf} \
+            --num_shards {threads}
+        """
+
+
+rule bcftools_stats:
+    input:
+        gvcf=f"{SNV_DIR}/germline/{{sample}}.deepvariant.g.vcf.gz",
+    output:
+        f"{QC_DIR}/germline/{{sample}}.germline.bcftools_stats.txt",
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {QC_DIR}/germline
+        bcftools stats {input.gvcf} > {output}
+        """
+
+
+rule gatk_varianteval:
+    input:
+        gvcf=f"{SNV_DIR}/germline/{{sample}}.deepvariant.g.vcf.gz",
+    output:
+        f"{QC_DIR}/germline/{{sample}}.germline.eval.grp",
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {QC_DIR}/germline
+        gatk --java-options '-Xmx12g -XX:ParallelGCThreads=16' VariantEval \
+            -R {REF} \
+            -O {output} \
+            --dbsnp {DBSNP} \
+            --eval {input.gvcf}
+        """
+
+
+rule mutect2_call:
+    input:
+        tumor_bam=lambda wc: f"{ALIGN_DIR}/{tumor_from_pair(wc)}.bqsr.bam",
+        tumor_bai=lambda wc: f"{ALIGN_DIR}/{tumor_from_pair(wc)}.bqsr.bam.bai",
+        normal_bam=lambda wc: f"{ALIGN_DIR}/{normal_from_pair(wc)}.bqsr.bam",
+        normal_bai=lambda wc: f"{ALIGN_DIR}/{normal_from_pair(wc)}.bqsr.bam.bai",
+    output:
+        vcf=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.mutect2.vcf.gz",
+        f1r2=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.f1r2.tar.gz",
+        stats=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.mutect2.vcf.gz.stats",
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {SNV_DIR}/{wildcards.pair}/mutect2
+        gatk Mutect2 \
+            --reference {REF} \
+            {INTERVALS_ARG} \
+            --input {input.tumor_bam} \
+            --input {input.normal_bam} \
+            --normal-sample {normal_from_pair(wildcards)} \
+            --tumor-sample {tumor_from_pair(wildcards)} \
+            {GERMLINE_RESOURCE_ARG} \
+            {PON_ARG} \
+            --output {output.vcf} \
+            --f1r2-tar-gz {output.f1r2} \
+            --independent-mates
+        """
+
+
+rule mutect2_pileup_tumor:
+    input:
+        bam=lambda wc: f"{ALIGN_DIR}/{tumor_from_pair(wc)}.bqsr.bam",
+        bai=lambda wc: f"{ALIGN_DIR}/{tumor_from_pair(wc)}.bqsr.bam.bai",
+    output:
+        f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.tpileup.table",
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {SNV_DIR}/{wildcards.pair}/mutect2
+        gatk --java-options -Xmx48g GetPileupSummaries \
+            -I {input.bam} \
+            -V {GERMLINE_RESOURCE} \
+            {INTERVALS_ARG} \
+            -O {output}
+        """
+
+
+rule mutect2_pileup_normal:
+    input:
+        bam=lambda wc: f"{ALIGN_DIR}/{normal_from_pair(wc)}.bqsr.bam",
+        bai=lambda wc: f"{ALIGN_DIR}/{normal_from_pair(wc)}.bqsr.bam.bai",
+    output:
+        f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.npileup.table",
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {SNV_DIR}/{wildcards.pair}/mutect2
+        gatk --java-options -Xmx48g GetPileupSummaries \
+            -I {input.bam} \
+            -V {GERMLINE_RESOURCE} \
+            {INTERVALS_ARG} \
+            -O {output}
+        """
+
+
+rule mutect2_contamination:
+    input:
+        tumor_pileup=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.tpileup.table",
+        normal_pileup=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.npileup.table",
+    output:
+        tumor_all=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.allpileups.table",
+        normal_all=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.normal.allpileups.table",
+        tumor_contam=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.contamination.table",
+        normal_contam=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.normal.contamination.table",
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {SNV_DIR}/{wildcards.pair}/mutect2
+        gatk GatherPileupSummaries \
+            --sequence-dictionary {REF_DICT} \
+            -I {input.tumor_pileup} \
+            -O {output.tumor_all}
+
+        gatk GatherPileupSummaries \
+            --sequence-dictionary {REF_DICT} \
+            -I {input.normal_pileup} \
+            -O {output.normal_all}
+
+        gatk CalculateContamination \
+            -I {output.tumor_all} \
+            --matched-normal {output.normal_all} \
+            -O {output.tumor_contam}
+
+        gatk CalculateContamination \
+            -I {output.normal_all} \
+            -O {output.normal_contam}
+        """
+
+
+rule mutect2_read_orientation:
+    input:
+        f1r2=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.f1r2.tar.gz",
+    output:
+        f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.read-orientation-model.tar.gz",
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {SNV_DIR}/{wildcards.pair}/mutect2
+        gatk LearnReadOrientationModel \
+            --output {output} \
+            --input {input.f1r2}
+        """
+
+
+rule mutect2_merge_stats:
+    input:
+        stats=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.mutect2.vcf.gz.stats",
+    output:
+        f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.final.stats",
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {SNV_DIR}/{wildcards.pair}/mutect2
+        gatk MergeMutectStats \
+            --stats {input.stats} \
+            -O {output}
+        """
+
+
+rule mutect2_filter:
+    input:
+        vcf=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.mutect2.vcf.gz",
+        stats=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.final.stats",
+        orientation=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.read-orientation-model.tar.gz",
+        tumor_contam=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.contamination.table",
+    output:
+        marked=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.mutect2.marked.vcf.gz",
+        marked_tbi=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.mutect2.marked.vcf.gz.tbi",
+        norm=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.mutect2.norm.vcf.gz",
+        norm_tbi=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.mutect2.norm.vcf.gz.tbi",
+        filter_stats=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.mutect2.marked.vcf.gz.filteringStats.tsv",
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {SNV_DIR}/{wildcards.pair}/mutect2
+        gatk SortVcf -I {input.vcf} -O {SNV_DIR}/{wildcards.pair}/mutect2/{wildcards.pair}.mutect2.concat.vcf.gz --CREATE_INDEX
+        gatk FilterMutectCalls \
+            -R {REF} \
+            -V {SNV_DIR}/{wildcards.pair}/mutect2/{wildcards.pair}.mutect2.concat.vcf.gz \
+            --ob-priors {input.orientation} \
+            --contamination-table {input.tumor_contam} \
+            --stats {input.stats} \
+            -O {output.marked}
+        gatk SelectVariants \
+            -R {REF} \
+            --variant {output.marked} \
+            --exclude-filtered \
+            --output {SNV_DIR}/{wildcards.pair}/mutect2/{wildcards.pair}.mutect2.final.vcf.gz
+        bcftools sort {SNV_DIR}/{wildcards.pair}/mutect2/{wildcards.pair}.mutect2.final.vcf.gz | \
+            bcftools norm --threads {threads} --check-ref s -f {REF} -O v | \
+            awk '{{gsub(/\\y[W|K|Y|R|S|M|B|D|H|V]\\y/,"N",$4); OFS = "\t"; print}}' | \
+            sed '/^$/d' | \
+            bcftools view - -Oz -o {output.norm}
+        bcftools index -t {output.norm}
+        """
+
+
+rule manta:
+    input:
+        tumor_bam=lambda wc: f"{ALIGN_DIR}/{tumor_from_pair(wc)}.bqsr.bam",
+        normal_bam=lambda wc: f"{ALIGN_DIR}/{normal_from_pair(wc)}.bqsr.bam",
+    output:
+        vcf=f"{SV_DIR}/{{pair}}/manta/{{pair}}.somaticSV.vcf.gz",
+        tbi=f"{SV_DIR}/{{pair}}/manta/{{pair}}.somaticSV.vcf.gz.tbi",
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {SV_DIR}/{wildcards.pair}/manta/run
+        {MANTA_CONFIG} \
+            --tumorBam {input.tumor_bam} \
+            --normalBam {input.normal_bam} \
+            --referenceFasta {REF} \
+            --runDir {SV_DIR}/{wildcards.pair}/manta/run
+        {SV_DIR}/{wildcards.pair}/manta/run/runWorkflow.py -m local -j {threads}
+        cp {SV_DIR}/{wildcards.pair}/manta/run/results/variants/somaticSV.vcf.gz {output.vcf}
+        cp {SV_DIR}/{wildcards.pair}/manta/run/results/variants/somaticSV.vcf.gz.tbi {output.tbi}
+        """
+
+
+rule cnvkit_batch:
+    input:
+        tumor_bam=lambda wc: f"{ALIGN_DIR}/{tumor_from_pair(wc)}.bqsr.bam",
+        normal_bam=lambda wc: f"{ALIGN_DIR}/{normal_from_pair(wc)}.bqsr.bam",
+    output:
+        cnr=lambda wc: f"{CNV_DIR}/{wc.pair}/cnvkit/{cnvkit_prefix(wc)}.cnr",
+        cns=lambda wc: f"{CNV_DIR}/{wc.pair}/cnvkit/{cnvkit_prefix(wc)}.cns",
+        pair_cns=f"{CNV_DIR}/{{pair}}/cnvkit/{{pair}}.cns",
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {CNV_DIR}/{wildcards.pair}/cnvkit
+        cnvkit.py batch \
+            {input.tumor_bam} -n {input.normal_bam} \
+            -f {REF} \
+            -m wgs \
+            --access {CNVKIT_ACCESS} \
+            --output-reference {CNV_DIR}/{wildcards.pair}/cnvkit/{wildcards.pair}.cnn \
+            --output-dir {CNV_DIR}/{wildcards.pair}/cnvkit
+        cp {CNV_DIR}/{wildcards.pair}/cnvkit/{cnvkit_prefix(wildcards)}.cns {output.pair_cns}
+        """
+
+
+rule vcf2maf_mutect2:
+    input:
+        vcf=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.mutect2.norm.vcf.gz",
+    output:
+        maf=f"{ANNOT_DIR}/{{pair}}/mutect2/{{pair}}.maf",
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {ANNOT_DIR}/{wildcards.pair}/mutect2
+        zcat {input.vcf} > {ANNOT_DIR}/{wildcards.pair}/mutect2/{wildcards.pair}.mutect2.norm.vcf
+        {VCF2MAF} \
+            --input-vcf {ANNOT_DIR}/{wildcards.pair}/mutect2/{wildcards.pair}.mutect2.norm.vcf \
+            --output-maf {output.maf} \
+            --tumor-id {tumor_from_pair(wildcards)} \
+            --normal-id {normal_from_pair(wildcards)} \
+            --vep-path /opt/vep/src/ensembl-vep \
+            --vep-data {VEP_CACHE} \
+            --ncbi-build {VEP_BUILD} \
+            --species {VEP_SPECIES} \
+            --ref-fasta {REF} \
+            --vep-forks {threads} \
+            --retain-info "set" \
+            --vep-overwrite
+        """
+
+
+rule multiqc:
+    input:
+        fastqc=expand(
+            f"{QC_DIR}/fastqc/{{sample}}.R1.trimmed_fastqc.zip",
+            sample=SAMPLE_LIST,
+        ) + expand(
+            f"{QC_DIR}/fastqc/{{sample}}.R2.trimmed_fastqc.zip",
+            sample=SAMPLE_LIST,
+        ),
+        fastq_screen=expand(
+            f"{QC_DIR}/fastq_screen/{{sample}}.R1.trimmed_screen.txt",
+            sample=SAMPLE_LIST,
+        ) + expand(
+            f"{QC_DIR}/fastq_screen/{{sample}}.R2.trimmed_screen.txt",
+            sample=SAMPLE_LIST,
+        ),
+        kraken=expand(
+            f"{QC_DIR}/kraken/{{sample}}.trimmed.kraken_bacteria.taxa.txt",
+            sample=SAMPLE_LIST,
+        ),
+        flagstat=expand(
+            f"{QC_DIR}/align/{{sample}}.samtools_flagstat.txt",
+            sample=SAMPLE_LIST,
+        ),
+        mosdepth=expand(
+            f"{QC_DIR}/align/{{sample}}.mosdepth.summary.txt",
+            sample=SAMPLE_LIST,
+        ),
+        qualimap=expand(
+            f"{QC_DIR}/align/{{sample}}_genome_results.txt",
+            sample=SAMPLE_LIST,
+        ),
+        germline_stats=maybe(
+            ENABLE_GERMLINE,
+            expand(
+                f"{QC_DIR}/germline/{{sample}}.germline.bcftools_stats.txt",
+                sample=NORMAL_SAMPLES,
+            ),
+        ),
+        germline_eval=maybe(
+            ENABLE_GERMLINE,
+            expand(
+                f"{QC_DIR}/germline/{{sample}}.germline.eval.grp",
+                sample=NORMAL_SAMPLES,
+            ),
+        ),
+    output:
+        f"{MULTIQC_DIR}/multiqc_report.html",
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {MULTIQC_DIR}
+        {MULTIQC_BIN} {OUTDIR} -o {MULTIQC_DIR}
+        """

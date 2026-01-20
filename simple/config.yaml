@@ -1,0 +1,41 @@
+project:
+  outdir: results
+  threads: 8
+  tmpdir: /tmp/logan_simple
+
+samples:
+  fastq_table: samples.tsv
+  pair_table: pairs.tsv
+
+enable:
+  qc: true
+  germline: false
+  somatic: true
+  sv: true
+  cnv: true
+  annotation: false
+
+reference:
+  genome_fasta: /data/ref/hg38.fa
+  genome_fai: /data/ref/hg38.fa.fai
+  genome_dict: /data/ref/hg38.dict
+  bwa_index: /data/ref/hg38.fa
+  known_sites:
+    - /data/ref/dbsnp_146.hg38.vcf.gz
+    - /data/ref/Mills_and_1000G_gold_standard.indels.hg38.vcf.gz
+  dbsnp: /data/ref/dbsnp_146.hg38.vcf.gz
+  intervals: /data/ref/wgs.interval_list
+  germline_resource: /data/ref/gnomad.hg38.vcf.gz
+  panel_of_normals: /data/ref/pon.vcf.gz
+  fastq_screen_conf: /data/ref/fastq_screen.conf
+  kraken_db: /data/ref/kraken2_db
+  vep_cache: /data/ref/vep_cache
+  vep_species: homo_sapiens
+  vep_build: GRCh38
+  cnvkit_access: /data/ref/access.bed
+
+tools:
+  deepvariant_run: /opt/deepvariant/bin/run_deepvariant
+  vcf2maf: /opt/vcf2maf/vcf2maf.pl
+  manta_config: /opt/tools/bin/configManta.py
+  multiqc: /usr/local/bin/multiqc
