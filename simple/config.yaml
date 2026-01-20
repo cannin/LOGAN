@@ -16,26 +16,27 @@ enable:
   annotation: false
 
 reference:
-  genome_fasta: /data/ref/hg38.fa
-  genome_fai: /data/ref/hg38.fa.fai
-  genome_dict: /data/ref/hg38.dict
-  bwa_index: /data/ref/hg38.fa
+  genome_fasta: /data/CCBR_Pipeliner/Pipelines/XAVIER/resources/hg38/bwamem2/GRCh38.d1.vd1.fa
+  genome_fai: /data/CCBR_Pipeliner/Pipelines/XAVIER/resources/hg38/bwamem2/GRCh38.d1.vd1.fa.fai
+  genome_dict: /data/CCBR_Pipeliner/Pipelines/XAVIER/resources/hg38/bwamem/GRCh38.d1.vd1.dict
+  bwa_index: /data/CCBR_Pipeliner/Pipelines/XAVIER/resources/hg38/bwamem/GRCh38.d1.vd1.fa
   known_sites:
-    - /data/ref/dbsnp_146.hg38.vcf.gz
-    - /data/ref/Mills_and_1000G_gold_standard.indels.hg38.vcf.gz
-  dbsnp: /data/ref/dbsnp_146.hg38.vcf.gz
-  intervals: /data/ref/wgs.interval_list
-  germline_resource: /data/ref/gnomad.hg38.vcf.gz
-  panel_of_normals: /data/ref/pon.vcf.gz
-  fastq_screen_conf: /data/ref/fastq_screen.conf
-  kraken_db: /data/ref/kraken2_db
-  vep_cache: /data/ref/vep_cache
+    - /data/CCBR_Pipeliner/Pipelines/XAVIER/resources/hg38/GATK_resource_bundle/dbsnp_138.hg38.vcf.gz
+    - /data/CCBR_Pipeliner/Pipelines/XAVIER/resources/hg38/GATK_resource_bundle/Mills_and_1000G_gold_standard.indels.hg38.vcf.gz
+    - /data/CCBR_Pipeliner/Pipelines/XAVIER/resources/hg38/GATK_resource_bundle/ALL.wgs.1000G_phase3.GRCh38.ncbi_remapper.20150424.shapeit2_indels.vcf.gz
+  dbsnp: /data/CCBR_Pipeliner/Pipelines/LOGAN/resources/hg38/GATK_GRCh38.d1.vd1/dbsnp_138.hg38.vcf.gz
+  intervals: /data/CCBR_Pipeliner/Pipelines/LOGAN/resources/hg38/resources_broad_hg38_v0_wgs_calling_regions.hg38.interval_list
+  germline_resource: /data/CCBR_Pipeliner/Pipelines/LOGAN/resources/hg38/GATK_GRCh38.d1.vd1/somatic-hg38-af-only-gnomad.hg38.vcf.gz
+  panel_of_normals: /data/CCBR_Pipeliner/Pipelines/LOGAN/resources/hg38/PON/MuTect2.PON.5210.vcf.gz
+  fastq_screen_conf: ../conf/fastq_screen.conf
+  kraken_db: /data/CCBR_Pipeliner/Pipelines/XAVIER/resources/hg38/kraken/20180907_standard_kraken2
+  vep_cache: /fdb/VEP/102/cache
   vep_species: homo_sapiens
   vep_build: GRCh38
-  cnvkit_access: /data/ref/access.bed
+  cnvkit_access: /data/CCBR_Pipeliner/Pipelines/XAVIER/resources/hg38/cnvkit/access-10kb.hg38.bed
 
 tools:
-  deepvariant_run: /opt/deepvariant/bin/run_deepvariant
-  vcf2maf: /opt/vcf2maf/vcf2maf.pl
-  manta_config: /opt/tools/bin/configManta.py
-  multiqc: /usr/local/bin/multiqc
+  deepvariant_run: run_deepvariant
+  vcf2maf: vcf2maf.pl
+  manta_config: configManta.py
+  multiqc: multiqc

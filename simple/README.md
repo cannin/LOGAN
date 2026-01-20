@@ -65,6 +65,9 @@ cp samples.tsv.example samples.tsv
 cp pairs.tsv.example pairs.tsv
 ```
 
+Notes:
+- `samples.tsv` and `pairs.tsv` should not include header rows.
+
 3. **Update `config.yaml`** with real paths:
    - `reference.genome_fasta`, `reference.known_sites`, `reference.germline_resource`, `reference.panel_of_normals`
    - `reference.fastq_screen_conf`, `reference.kraken_db`, `reference.cnvkit_access`
