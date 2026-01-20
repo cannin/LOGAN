@@ -5,12 +5,12 @@ set -euo pipefail
 
 mkdir -p results/fastp
 fastp -w 8 \
-    -i /data/fastq/TUMOR_1_R1.fastq.gz -I /data/fastq/TUMOR_1_R2.fastq.gz \
+    -i TUMOR_1_R1.fastq.gz -I TUMOR_1_R2.fastq.gz \
     -o results/fastp/TUMOR_1.R1.trimmed.fastq.gz -O results/fastp/TUMOR_1.R2.trimmed.fastq.gz \
     --json results/fastp/TUMOR_1.fastp.json \
     --html results/fastp/TUMOR_1.fastp.html
 fastp -w 8 \
-    -i /data/fastq/NORMAL_1_R1.fastq.gz -I /data/fastq/NORMAL_1_R2.fastq.gz \
+    -i NORMAL_1_R1.fastq.gz -I NORMAL_1_R2.fastq.gz \
     -o results/fastp/NORMAL_1.R1.trimmed.fastq.gz -O results/fastp/NORMAL_1.R2.trimmed.fastq.gz \
     --json results/fastp/NORMAL_1.fastp.json \
     --html results/fastp/NORMAL_1.fastp.html
@@ -55,71 +55,27 @@ cut -f2,3 results/qc/kraken/NORMAL_1.trimmed.kraken_bacteria.taxa.txt | \
 
 mkdir -p results/align
 mkdir -p /tmp/logan_simple/bwa_TUMOR_1
-if lscpu | grep -q avx2; then
-    bwa-mem2.avx2 mem -M \
-        -R '@RG\tID:TUMOR_1\tSM:TUMOR_1\tPL:illumina\tLB:TUMOR_1\tPU:TUMOR_1\tDS:wgs' \
-        -t 8 \
-        /data/CCBR_Pipeliner/Pipelines/XAVIER/resources/hg38/bwamem2/GRCh38.d1.vd1.fa \
-        results/fastp/TUMOR_1.R1.trimmed.fastq.gz results/fastp/TUMOR_1.R2.trimmed.fastq.gz | \
-    samblaster -M | \
-    samtools sort -T /tmp/logan_simple/bwa_TUMOR_1/ \
-        -@ 8 -m 2G - \
-        --write-index -o results/align/TUMOR_1.bam##idx##results/align/TUMOR_1.bam.bai
-elif lscpu | grep -q sse4_1; then
-    bwa-mem2.sse41 mem -M \
-        -R '@RG\tID:TUMOR_1\tSM:TUMOR_1\tPL:illumina\tLB:TUMOR_1\tPU:TUMOR_1\tDS:wgs' \
-        -t 8 \
-        /data/CCBR_Pipeliner/Pipelines/XAVIER/resources/hg38/bwamem2/GRCh38.d1.vd1.fa \
-        results/fastp/TUMOR_1.R1.trimmed.fastq.gz results/fastp/TUMOR_1.R2.trimmed.fastq.gz | \
-    samblaster -M | \
-    samtools sort -T /tmp/logan_simple/bwa_TUMOR_1/ \
-        -@ 8 -m 2G - \
-        --write-index -o results/align/TUMOR_1.bam##idx##results/align/TUMOR_1.bam.bai
-else
-    bwa-mem2 mem -M \
-        -R '@RG\tID:TUMOR_1\tSM:TUMOR_1\tPL:illumina\tLB:TUMOR_1\tPU:TUMOR_1\tDS:wgs' \
-        -t 8 \
-        /data/CCBR_Pipeliner/Pipelines/XAVIER/resources/hg38/bwamem2/GRCh38.d1.vd1.fa \
-        results/fastp/TUMOR_1.R1.trimmed.fastq.gz results/fastp/TUMOR_1.R2.trimmed.fastq.gz | \
-    samblaster -M | \
-    samtools sort -T /tmp/logan_simple/bwa_TUMOR_1/ \
-        -@ 8 -m 2G - \
-        --write-index -o results/align/TUMOR_1.bam##idx##results/align/TUMOR_1.bam.bai
-fi
+bwa-mem2.avx2 mem -M \
+    -R '@RG\tID:TUMOR_1\tSM:TUMOR_1\tPL:illumina\tLB:TUMOR_1\tPU:TUMOR_1\tDS:wgs' \
+    -t 8 \
+    /data/CCBR_Pipeliner/Pipelines/XAVIER/resources/hg38/bwamem2/GRCh38.d1.vd1.fa \
+    results/fastp/TUMOR_1.R1.trimmed.fastq.gz results/fastp/TUMOR_1.R2.trimmed.fastq.gz | \
+samblaster -M | \
+samtools sort -T /tmp/logan_simple/bwa_TUMOR_1/ \
+    -@ 8 -m 2G - \
+    --write-index -o results/align/TUMOR_1.bam##idx##results/align/TUMOR_1.bam.bai
 
 mkdir -p results/align
 mkdir -p /tmp/logan_simple/bwa_NORMAL_1
-if lscpu | grep -q avx2; then
-    bwa-mem2.avx2 mem -M \
-        -R '@RG\tID:NORMAL_1\tSM:NORMAL_1\tPL:illumina\tLB:NORMAL_1\tPU:NORMAL_1\tDS:wgs' \
-        -t 8 \
-        /data/CCBR_Pipeliner/Pipelines/XAVIER/resources/hg38/bwamem2/GRCh38.d1.vd1.fa \
-        results/fastp/NORMAL_1.R1.trimmed.fastq.gz results/fastp/NORMAL_1.R2.trimmed.fastq.gz | \
-    samblaster -M | \
-    samtools sort -T /tmp/logan_simple/bwa_NORMAL_1/ \
-        -@ 8 -m 2G - \
-        --write-index -o results/align/NORMAL_1.bam##idx##results/align/NORMAL_1.bam.bai
-elif lscpu | grep -q sse4_1; then
-    bwa-mem2.sse41 mem -M \
-        -R '@RG\tID:NORMAL_1\tSM:NORMAL_1\tPL:illumina\tLB:NORMAL_1\tPU:NORMAL_1\tDS:wgs' \
-        -t 8 \
-        /data/CCBR_Pipeliner/Pipelines/XAVIER/resources/hg38/bwamem2/GRCh38.d1.vd1.fa \
-        results/fastp/NORMAL_1.R1.trimmed.fastq.gz results/fastp/NORMAL_1.R2.trimmed.fastq.gz | \
-    samblaster -M | \
-    samtools sort -T /tmp/logan_simple/bwa_NORMAL_1/ \
-        -@ 8 -m 2G - \
-        --write-index -o results/align/NORMAL_1.bam##idx##results/align/NORMAL_1.bam.bai
-else
-    bwa-mem2 mem -M \
-        -R '@RG\tID:NORMAL_1\tSM:NORMAL_1\tPL:illumina\tLB:NORMAL_1\tPU:NORMAL_1\tDS:wgs' \
-        -t 8 \
-        /data/CCBR_Pipeliner/Pipelines/XAVIER/resources/hg38/bwamem2/GRCh38.d1.vd1.fa \
-        results/fastp/NORMAL_1.R1.trimmed.fastq.gz results/fastp/NORMAL_1.R2.trimmed.fastq.gz | \
-    samblaster -M | \
-    samtools sort -T /tmp/logan_simple/bwa_NORMAL_1/ \
-        -@ 8 -m 2G - \
-        --write-index -o results/align/NORMAL_1.bam##idx##results/align/NORMAL_1.bam.bai
-fi
+bwa-mem2.avx2 mem -M \
+    -R '@RG\tID:NORMAL_1\tSM:NORMAL_1\tPL:illumina\tLB:NORMAL_1\tPU:NORMAL_1\tDS:wgs' \
+    -t 8 \
+    /data/CCBR_Pipeliner/Pipelines/XAVIER/resources/hg38/bwamem2/GRCh38.d1.vd1.fa \
+    results/fastp/NORMAL_1.R1.trimmed.fastq.gz results/fastp/NORMAL_1.R2.trimmed.fastq.gz | \
+samblaster -M | \
+samtools sort -T /tmp/logan_simple/bwa_NORMAL_1/ \
+    -@ 8 -m 2G - \
+    --write-index -o results/align/NORMAL_1.bam##idx##results/align/NORMAL_1.bam.bai
 
 mkdir -p results/bqsr
 gatk --java-options '-Xmx10g' BaseRecalibrator \
