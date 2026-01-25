@@ -1,204 +1,97 @@
-import csv
-
-configfile: "config.yaml"
+import os
 
 shell.executable("/bin/bash")
 shell.prefix("set -euo pipefail; ")
 
-OUTDIR = config["project"]["outdir"]
-THREADS = int(config["project"].get("threads", 8))
-TMPDIR = config["project"].get("tmpdir", "/tmp")
+BASE_DIR = os.path.abspath(os.getcwd())
+OUTDIR = os.path.join(BASE_DIR, "results")
+THREADS = 8
+TMPDIR = os.path.join(BASE_DIR, "tmp")
 
-ENABLE_QC = bool(config["enable"].get("qc", True))
-ENABLE_GERMLINE = bool(config["enable"].get("germline", False))
-ENABLE_SOMATIC = bool(config["enable"].get("somatic", True))
-ENABLE_SV = bool(config["enable"].get("sv", True))
-ENABLE_CNV = bool(config["enable"].get("cnv", True))
-ENABLE_ANNOTATION = bool(config["enable"].get("annotation", False))
+TUMOR_SAMPLE = "CUACC327_PDX_WGS_E250051196_L01_82"
+NORMAL_SAMPLE = "CU327_human_blood_WGS_E250056942_L01_61"
+SAMPLES = [TUMOR_SAMPLE, NORMAL_SAMPLE]
 
-FASTP_DIR = f"{OUTDIR}/fastp"
-ALIGN_DIR = f"{OUTDIR}/align"
-BQS_DIR = f"{OUTDIR}/bqsr"
-QC_DIR = f"{OUTDIR}/qc"
-SNV_DIR = f"{OUTDIR}/snv"
-SV_DIR = f"{OUTDIR}/sv"
-CNV_DIR = f"{OUTDIR}/cnv"
-ANNOT_DIR = f"{OUTDIR}/annotation"
-MULTIQC_DIR = f"{OUTDIR}/multiqc"
+PAIR_ID = "CUACC327_PDX_WGS_E250051196_L01_82_vs_CU327_human_blood_WGS_E250056942_L01_61"
 
-REF = config["reference"]["genome_fasta"]
-REF_DICT = config["reference"]["genome_dict"]
-KNOWN_SITES = config["reference"].get("known_sites", [])
-DBSNP = config["reference"].get("dbsnp", "")
-INTERVALS = config["reference"].get("intervals", "")
-GERMLINE_RESOURCE = config["reference"].get("germline_resource", "")
-PON = config["reference"].get("panel_of_normals", "")
-FASTQ_SCREEN_CONF = config["reference"].get("fastq_screen_conf", "")
-KRAKEN_DB = config["reference"].get("kraken_db", "")
-CNVKIT_ACCESS = config["reference"].get("cnvkit_access", "")
-VEP_CACHE = config["reference"].get("vep_cache", "")
-VEP_SPECIES = config["reference"].get("vep_species", "")
-VEP_BUILD = config["reference"].get("vep_build", "")
+ruleorder: apply_bqsr > bwa_mem2_align
 
-DEEPVARIANT_RUN = config["tools"].get("deepvariant_run", "")
-VCF2MAF = config["tools"].get("vcf2maf", "")
-MANTA_CONFIG = config["tools"].get("manta_config", "")
-MULTIQC_BIN = config["tools"].get("multiqc", "multiqc")
+FASTP_DIR = os.path.join(OUTDIR, "fastp")
+ALIGN_DIR = os.path.join(OUTDIR, "align")
+BQS_DIR = os.path.join(OUTDIR, "bqsr")
+QC_DIR = os.path.join(OUTDIR, "qc")
+SNV_DIR = os.path.join(OUTDIR, "snv")
+SV_DIR = os.path.join(OUTDIR, "sv")
+CNV_DIR = os.path.join(OUTDIR, "cnv")
+MULTIQC_DIR = os.path.join(OUTDIR, "multiqc")
+PAIR_DIR = os.path.join(SNV_DIR, PAIR_ID, "mutect2")
+MANTA_DIR = os.path.join(SV_DIR, PAIR_ID, "manta")
+CNVKIT_DIR = os.path.join(CNV_DIR, PAIR_ID, "cnvkit")
+TUMOR_BQSR_BAM = os.path.join(ALIGN_DIR, TUMOR_SAMPLE + ".bqsr.bam")
+TUMOR_BQSR_BAI = os.path.join(ALIGN_DIR, TUMOR_SAMPLE + ".bqsr.bam.bai")
+NORMAL_BQSR_BAM = os.path.join(ALIGN_DIR, NORMAL_SAMPLE + ".bqsr.bam")
+NORMAL_BQSR_BAI = os.path.join(ALIGN_DIR, NORMAL_SAMPLE + ".bqsr.bam.bai")
+CNVKIT_PREFIX = TUMOR_SAMPLE + ".bqsr"
 
+REF_DIR = os.path.join(BASE_DIR, "resources", "hg38")
+REF = os.path.join(REF_DIR, "Homo_sapiens_assembly38.fasta")
+REF_DICT = os.path.join(REF_DIR, "Homo_sapiens_assembly38.dict")
+KNOWN_SITES_DBSNP = os.path.join(REF_DIR, "known_sites", "Homo_sapiens_assembly38.dbsnp138.vcf.gz")
+KNOWN_SITES_MILLS = os.path.join(
+    REF_DIR,
+    "known_sites",
+    "Mills_and_1000G_gold_standard.indels.hg38.vcf.gz",
+)
+KNOWN_SITES_PHASE1 = os.path.join(
+    REF_DIR,
+    "known_sites",
+    "1000G_phase1.snps.high_confidence.hg38.vcf.gz",
+)
+GERMLINE_RESOURCE = os.path.join(REF_DIR, "somatic", "af-only-gnomad.hg38.vcf.gz")
+PON = os.path.join(REF_DIR, "somatic", "1000g_pon.hg38.vcf.gz")
+INTERVALS = os.path.abspath(
+    os.path.join(BASE_DIR, "..", "assets", "hg38_v0_wgs_calling_regions.hg38.interval_list")
+)
+FASTQ_SCREEN_CONF = os.path.join(REF_DIR, "fastq_screen.conf")
+KRAKEN_DB = os.path.join(REF_DIR, "kraken_db")
+CNVKIT_ACCESS = os.path.join(REF_DIR, "cnvkit", "access-10kb.hg38.bed")
 
-def read_tsv(path, required_columns):
-    """Read a TSV file and validate required columns.
+BWA_MEM2_BIN = "bwa-mem2.avx2"
+MULTIQC_BIN = "multiqc"
 
-    Args:
-        path: TSV path to read.
-        required_columns: List of required column names.
-
-    Returns:
-        List of row dictionaries.
-    """
-    with open(path, "r", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle, delimiter="\t")
-        rows = [row for row in reader]
-
-    if not rows:
-        raise ValueError(f"No rows found in {path}")
-
-    missing = [col for col in required_columns if col not in rows[0]]
-    if missing:
-        missing_str = ", ".join(missing)
-        raise ValueError(f"Missing columns in {path}: {missing_str}")
-
-    return rows
-
-
-fastq_rows = read_tsv(config["samples"]["fastq_table"], ["sample", "r1", "r2"])
-SAMPLES = {row["sample"]: {"r1": row["r1"], "r2": row["r2"]} for row in fastq_rows}
-SAMPLE_LIST = sorted(SAMPLES.keys())
-
-pair_rows = read_tsv(config["samples"]["pair_table"], ["tumor", "normal"])
-PAIRS = [(row["tumor"], row["normal"]) for row in pair_rows]
-PAIR_IDS = [f"{tumor}_vs_{normal}" for tumor, normal in PAIRS]
-PAIR_TO_TUMOR = {f"{tumor}_vs_{normal}": tumor for tumor, normal in PAIRS}
-PAIR_TO_NORMAL = {f"{tumor}_vs_{normal}": normal for tumor, normal in PAIRS}
-NORMAL_SAMPLES = sorted({normal for _, normal in PAIRS})
-
-KNOWN_SITES_ARGS = " ".join([f"--known-sites {path}" for path in KNOWN_SITES])
-INTERVALS_ARG = f"--intervals {INTERVALS}" if INTERVALS else ""
-GERMLINE_RESOURCE_ARG = f"--germline-resource {GERMLINE_RESOURCE}" if GERMLINE_RESOURCE else ""
-PON_ARG = f"--panel-of-normals {PON}" if PON else ""
-
-
-def sample_fastqs(sample):
-    """Return R1/R2 paths for a sample.
-
-    Args:
-        sample: Sample identifier.
-
-    Returns:
-        Tuple of (r1, r2) FASTQ paths.
-    """
-    return SAMPLES[sample]["r1"], SAMPLES[sample]["r2"]
-
-
-def tumor_from_pair(wildcards):
-    """Resolve tumor sample name from a pair wildcard.
-
-    Args:
-        wildcards: Snakemake wildcards object with pair key.
-
-    Returns:
-        Tumor sample name.
-    """
-    return PAIR_TO_TUMOR[wildcards.pair]
-
-
-def normal_from_pair(wildcards):
-    """Resolve normal sample name from a pair wildcard.
-
-    Args:
-        wildcards: Snakemake wildcards object with pair key.
-
-    Returns:
-        Normal sample name.
-    """
-    return PAIR_TO_NORMAL[wildcards.pair]
-
-
-def maybe(condition, items):
-    """Return items if condition is truthy, else an empty list.
-
-    Args:
-        condition: Boolean condition.
-        items: List of items to return if condition is true.
-
-    Returns:
-        List of items or empty list.
-    """
-    return items if condition else []
-
-def cnvkit_prefix(wildcards):
-    """Return CNVkit output prefix for a tumor sample.
-
-    Args:
-        wildcards: Snakemake wildcards object with pair key.
-
-    Returns:
-        CNVkit output prefix string.
-    """
-    return f"{tumor_from_pair(wildcards)}.bqsr"
+KNOWN_SITES_ARGS = " ".join(
+    [
+        "--known-sites " + KNOWN_SITES_DBSNP,
+        "--known-sites " + KNOWN_SITES_MILLS,
+        "--known-sites " + KNOWN_SITES_PHASE1,
+    ]
+)
+INTERVALS_ARG = "--intervals " + INTERVALS
+GERMLINE_RESOURCE_ARG = "--germline-resource " + GERMLINE_RESOURCE
+PON_ARG = "--panel-of-normals " + PON
 
 
 rule all:
     input:
-        expand(f"{ALIGN_DIR}/{{sample}}.bqsr.bam", sample=SAMPLE_LIST),
-        expand(f"{ALIGN_DIR}/{{sample}}.bqsr.bam.bai", sample=SAMPLE_LIST),
-        *maybe(
-            ENABLE_GERMLINE,
-            expand(f"{SNV_DIR}/germline/{{sample}}.deepvariant.vcf.gz", sample=NORMAL_SAMPLES),
-        ),
-        *maybe(
-            ENABLE_SOMATIC,
-            expand(
-                f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.mutect2.norm.vcf.gz",
-                pair=PAIR_IDS,
-            ),
-        ),
-        *maybe(
-            ENABLE_SV,
-            expand(
-                f"{SV_DIR}/{{pair}}/manta/{{pair}}.somaticSV.vcf.gz",
-                pair=PAIR_IDS,
-            ),
-        ),
-        *maybe(
-            ENABLE_CNV,
-            expand(
-                f"{CNV_DIR}/{{pair}}/cnvkit/{{pair}}.cns",
-                pair=PAIR_IDS,
-            ),
-        ),
-        *maybe(
-            ENABLE_ANNOTATION and ENABLE_SOMATIC,
-            expand(
-                f"{ANNOT_DIR}/{{pair}}/mutect2/{{pair}}.maf",
-                pair=PAIR_IDS,
-            ),
-        ),
-        *maybe(
-            ENABLE_QC,
-            [f"{MULTIQC_DIR}/multiqc_report.html"],
-        )
+        expand(os.path.join(ALIGN_DIR, "{sample}.bqsr.bam"), sample=SAMPLES),
+        expand(os.path.join(ALIGN_DIR, "{sample}.bqsr.bam.bai"), sample=SAMPLES),
+        os.path.join(PAIR_DIR, PAIR_ID + ".mutect2.norm.vcf.gz"),
+        os.path.join(PAIR_DIR, PAIR_ID + ".mutect2.norm.vcf.gz.tbi"),
+        os.path.join(MANTA_DIR, PAIR_ID + ".somaticSV.vcf.gz"),
+        os.path.join(MANTA_DIR, PAIR_ID + ".somaticSV.vcf.gz.tbi"),
+        os.path.join(CNVKIT_DIR, PAIR_ID + ".cns"),
+        os.path.join(MULTIQC_DIR, "multiqc_report.html"),
 
 
 rule fastp:
     input:
-        r1=lambda wc: sample_fastqs(wc.sample)[0],
-        r2=lambda wc: sample_fastqs(wc.sample)[1],
+        r1=os.path.join(BASE_DIR, "{sample}_1.fq.gz"),
+        r2=os.path.join(BASE_DIR, "{sample}_2.fq.gz"),
     output:
-        r1=f"{FASTP_DIR}/{{sample}}.R1.trimmed.fastq.gz",
-        r2=f"{FASTP_DIR}/{{sample}}.R2.trimmed.fastq.gz",
-        json=f"{FASTP_DIR}/{{sample}}.fastp.json",
-        html=f"{FASTP_DIR}/{{sample}}.fastp.html",
+        r1=os.path.join(FASTP_DIR, "{sample}.R1.trimmed.fastq.gz"),
+        r2=os.path.join(FASTP_DIR, "{sample}.R2.trimmed.fastq.gz"),
+        json=os.path.join(FASTP_DIR, "{sample}.fastp.json"),
+        html=os.path.join(FASTP_DIR, "{sample}.fastp.html"),
     threads: THREADS
     shell:
         """
@@ -208,37 +101,41 @@ rule fastp:
             -o {output.r1} -O {output.r2} \
             --json {output.json} \
             --html {output.html}
+        printf "%s %s\\n" "{rule}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> {OUTDIR}/rule_finish.log
+        notifyme
         """
 
 
 rule fastqc_trimmed:
     input:
-        r1=f"{FASTP_DIR}/{{sample}}.R1.trimmed.fastq.gz",
-        r2=f"{FASTP_DIR}/{{sample}}.R2.trimmed.fastq.gz",
+        r1=os.path.join(FASTP_DIR, "{sample}.R1.trimmed.fastq.gz"),
+        r2=os.path.join(FASTP_DIR, "{sample}.R2.trimmed.fastq.gz"),
     output:
-        r1_zip=f"{QC_DIR}/fastqc/{{sample}}.R1.trimmed_fastqc.zip",
-        r1_html=f"{QC_DIR}/fastqc/{{sample}}.R1.trimmed_fastqc.html",
-        r2_zip=f"{QC_DIR}/fastqc/{{sample}}.R2.trimmed_fastqc.zip",
-        r2_html=f"{QC_DIR}/fastqc/{{sample}}.R2.trimmed_fastqc.html",
+        r1_zip=os.path.join(QC_DIR, "fastqc", "{sample}.R1.trimmed_fastqc.zip"),
+        r1_html=os.path.join(QC_DIR, "fastqc", "{sample}.R1.trimmed_fastqc.html"),
+        r2_zip=os.path.join(QC_DIR, "fastqc", "{sample}.R2.trimmed_fastqc.zip"),
+        r2_html=os.path.join(QC_DIR, "fastqc", "{sample}.R2.trimmed_fastqc.html"),
     threads: THREADS
     shell:
         """
         mkdir -p {QC_DIR}/fastqc
         fastqc -t {threads} -o {QC_DIR}/fastqc {input.r1} {input.r2}
+        printf "%s %s\\n" "{rule}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> {OUTDIR}/rule_finish.log
+        notifyme
         """
 
 
 rule fastq_screen:
     input:
-        r1=f"{FASTP_DIR}/{{sample}}.R1.trimmed.fastq.gz",
-        r2=f"{FASTP_DIR}/{{sample}}.R2.trimmed.fastq.gz",
+        r1=os.path.join(FASTP_DIR, "{sample}.R1.trimmed.fastq.gz"),
+        r2=os.path.join(FASTP_DIR, "{sample}.R2.trimmed.fastq.gz"),
     output:
-        r1_html=f"{QC_DIR}/fastq_screen/{{sample}}.R1.trimmed_screen.html",
-        r1_png=f"{QC_DIR}/fastq_screen/{{sample}}.R1.trimmed_screen.png",
-        r1_txt=f"{QC_DIR}/fastq_screen/{{sample}}.R1.trimmed_screen.txt",
-        r2_html=f"{QC_DIR}/fastq_screen/{{sample}}.R2.trimmed_screen.html",
-        r2_png=f"{QC_DIR}/fastq_screen/{{sample}}.R2.trimmed_screen.png",
-        r2_txt=f"{QC_DIR}/fastq_screen/{{sample}}.R2.trimmed_screen.txt",
+        r1_html=os.path.join(QC_DIR, "fastq_screen", "{sample}.R1.trimmed_screen.html"),
+        r1_png=os.path.join(QC_DIR, "fastq_screen", "{sample}.R1.trimmed_screen.png"),
+        r1_txt=os.path.join(QC_DIR, "fastq_screen", "{sample}.R1.trimmed_screen.txt"),
+        r2_html=os.path.join(QC_DIR, "fastq_screen", "{sample}.R2.trimmed_screen.html"),
+        r2_png=os.path.join(QC_DIR, "fastq_screen", "{sample}.R2.trimmed_screen.png"),
+        r2_txt=os.path.join(QC_DIR, "fastq_screen", "{sample}.R2.trimmed_screen.txt"),
     threads: THREADS
     shell:
         """
@@ -250,16 +147,18 @@ rule fastq_screen:
             --aligner bowtie2 \
             --force \
             {input.r1} {input.r2}
+        printf "%s %s\\n" "{rule}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> {OUTDIR}/rule_finish.log
+        notifyme
         """
 
 
 rule kraken2:
     input:
-        r1=f"{FASTP_DIR}/{{sample}}.R1.trimmed.fastq.gz",
-        r2=f"{FASTP_DIR}/{{sample}}.R2.trimmed.fastq.gz",
+        r1=os.path.join(FASTP_DIR, "{sample}.R1.trimmed.fastq.gz"),
+        r2=os.path.join(FASTP_DIR, "{sample}.R2.trimmed.fastq.gz"),
     output:
-        report=f"{QC_DIR}/kraken/{{sample}}.trimmed.kraken_bacteria.taxa.txt",
-        krona=f"{QC_DIR}/kraken/{{sample}}.trimmed.kraken_bacteria.krona.html",
+        report=os.path.join(QC_DIR, "kraken", "{sample}.trimmed.kraken_bacteria.taxa.txt"),
+        krona=os.path.join(QC_DIR, "kraken", "{sample}.trimmed.kraken_bacteria.krona.html"),
     threads: THREADS
     shell:
         """
@@ -271,30 +170,24 @@ rule kraken2:
             --paired {input.r1} {input.r2}
         cut -f2,3 {output.report} | \
             ktImportTaxonomy - -o {output.krona}
+        printf "%s %s\\n" "{rule}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> {OUTDIR}/rule_finish.log
+        notifyme
         """
 
 
 rule bwa_mem2_align:
     input:
-        r1=f"{FASTP_DIR}/{{sample}}.R1.trimmed.fastq.gz",
-        r2=f"{FASTP_DIR}/{{sample}}.R2.trimmed.fastq.gz",
+        r1=os.path.join(FASTP_DIR, "{sample}.R1.trimmed.fastq.gz"),
+        r2=os.path.join(FASTP_DIR, "{sample}.R2.trimmed.fastq.gz"),
     output:
-        bam=f"{ALIGN_DIR}/{{sample}}.bam",
-        bai=f"{ALIGN_DIR}/{{sample}}.bam.bai",
+        bam=os.path.join(ALIGN_DIR, "{sample}.bam"),
+        bai=os.path.join(ALIGN_DIR, "{sample}.bam.bai"),
     threads: THREADS
     shell:
         """
         mkdir -p {ALIGN_DIR}
-        if lscpu | grep -q avx2; then
-            BWA_BINARY="bwa-mem2.avx2"
-        elif lscpu | grep -q sse4_1; then
-            BWA_BINARY="bwa-mem2.sse41"
-        else
-            BWA_BINARY="bwa-mem2"
-        fi
-
         mkdir -p {TMPDIR}/bwa_{wildcards.sample}
-        $BWA_BINARY mem -M \
+        {BWA_MEM2_BIN} mem -M \
             -R '@RG\\tID:{wildcards.sample}\\tSM:{wildcards.sample}\\tPL:illumina\\tLB:{wildcards.sample}\\tPU:{wildcards.sample}\\tDS:wgs' \
             -t {threads} \
             {REF} \
@@ -303,15 +196,17 @@ rule bwa_mem2_align:
         samtools sort -T {TMPDIR}/bwa_{wildcards.sample}/ \
             -@ {threads} -m 2G - \
             --write-index -o {output.bam}##idx##{output.bai}
+        printf "%s %s\\n" "{rule}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> {OUTDIR}/rule_finish.log
+        notifyme
         """
 
 
 rule bqsr_table:
     input:
-        bam=f"{ALIGN_DIR}/{{sample}}.bam",
-        bai=f"{ALIGN_DIR}/{{sample}}.bam.bai",
+        bam=os.path.join(ALIGN_DIR, "{sample}.bam"),
+        bai=os.path.join(ALIGN_DIR, "{sample}.bam.bai"),
     output:
-        table=f"{BQS_DIR}/{{sample}}.recal_data.grp",
+        table=os.path.join(BQS_DIR, "{sample}.recal_data.grp"),
     threads: THREADS
     shell:
         """
@@ -322,17 +217,19 @@ rule bqsr_table:
             {KNOWN_SITES_ARGS} \
             {INTERVALS_ARG} \
             --output {output.table}
+        printf "%s %s\\n" "{rule}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> {OUTDIR}/rule_finish.log
+        notifyme
         """
 
 
 rule apply_bqsr:
     input:
-        bam=f"{ALIGN_DIR}/{{sample}}.bam",
-        bai=f"{ALIGN_DIR}/{{sample}}.bam.bai",
-        table=f"{BQS_DIR}/{{sample}}.recal_data.grp",
+        bam=os.path.join(ALIGN_DIR, "{sample}.bam"),
+        bai=os.path.join(ALIGN_DIR, "{sample}.bam.bai"),
+        table=os.path.join(BQS_DIR, "{sample}.recal_data.grp"),
     output:
-        bam=f"{ALIGN_DIR}/{{sample}}.bqsr.bam",
-        bai=f"{ALIGN_DIR}/{{sample}}.bqsr.bam.bai",
+        bam=os.path.join(ALIGN_DIR, "{sample}.bqsr.bam"),
+        bai=os.path.join(ALIGN_DIR, "{sample}.bqsr.bam.bai"),
     threads: THREADS
     shell:
         """
@@ -344,58 +241,60 @@ rule apply_bqsr:
             --use-jdk-inflater \
             --use-jdk-deflater
         samtools index -@ {threads} {output.bam} {output.bai}
+        printf "%s %s\\n" "{rule}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> {OUTDIR}/rule_finish.log
+        notifyme
         """
 
 
 rule samtools_flagstat:
     input:
-        bam=f"{ALIGN_DIR}/{{sample}}.bqsr.bam",
-        bai=f"{ALIGN_DIR}/{{sample}}.bqsr.bam.bai",
+        bam=os.path.join(ALIGN_DIR, "{sample}.bqsr.bam"),
+        bai=os.path.join(ALIGN_DIR, "{sample}.bqsr.bam.bai"),
     output:
-        f"{QC_DIR}/align/{{sample}}.samtools_flagstat.txt",
+        os.path.join(QC_DIR, "align", "{sample}.samtools_flagstat.txt"),
     threads: THREADS
     shell:
         """
         mkdir -p {QC_DIR}/align
         samtools flagstat {input.bam} > {output}
+        printf "%s %s\\n" "{rule}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> {OUTDIR}/rule_finish.log
+        notifyme
         """
 
 
 rule mosdepth:
     input:
-        bam=f"{ALIGN_DIR}/{{sample}}.bqsr.bam",
-        bai=f"{ALIGN_DIR}/{{sample}}.bqsr.bam.bai",
+        bam=os.path.join(ALIGN_DIR, "{sample}.bqsr.bam"),
+        bai=os.path.join(ALIGN_DIR, "{sample}.bqsr.bam.bai"),
     output:
-        region=f"{QC_DIR}/align/{{sample}}.mosdepth.region.dist.txt",
-        summary=f"{QC_DIR}/align/{{sample}}.mosdepth.summary.txt",
-        regions=f"{QC_DIR}/align/{{sample}}.regions.bed.gz",
-        regions_csi=f"{QC_DIR}/align/{{sample}}.regions.bed.gz.csi",
+        region=os.path.join(QC_DIR, "align", "{sample}.mosdepth.region.dist.txt"),
+        summary=os.path.join(QC_DIR, "align", "{sample}.mosdepth.summary.txt"),
+        regions=os.path.join(QC_DIR, "align", "{sample}.regions.bed.gz"),
+        regions_csi=os.path.join(QC_DIR, "align", "{sample}.regions.bed.gz.csi"),
     threads: THREADS
     shell:
         """
         mkdir -p {QC_DIR}/align
         mosdepth -n --fast-mode --by 500 {QC_DIR}/align/{wildcards.sample} {input.bam} -t {threads}
-        mv {QC_DIR}/align/{wildcards.sample}.mosdepth.region.dist.txt {output.region}
-        mv {QC_DIR}/align/{wildcards.sample}.mosdepth.summary.txt {output.summary}
-        mv {QC_DIR}/align/{wildcards.sample}.regions.bed.gz {output.regions}
-        mv {QC_DIR}/align/{wildcards.sample}.regions.bed.gz.csi {output.regions_csi}
+        printf "%s %s\\n" "{rule}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> {OUTDIR}/rule_finish.log
+        notifyme
         """
 
 
 rule qualimap:
     input:
-        bam=f"{ALIGN_DIR}/{{sample}}.bqsr.bam",
-        bai=f"{ALIGN_DIR}/{{sample}}.bqsr.bam.bai",
+        bam=os.path.join(ALIGN_DIR, "{sample}.bqsr.bam"),
+        bai=os.path.join(ALIGN_DIR, "{sample}.bqsr.bam.bai"),
     output:
-        results=f"{QC_DIR}/align/{{sample}}_genome_results.txt",
-        html=f"{QC_DIR}/align/{{sample}}_qualimapReport.html",
+        results=os.path.join(QC_DIR, "align", "{sample}_genome_results.txt"),
+        html=os.path.join(QC_DIR, "align", "{sample}_qualimapReport.html"),
     threads: THREADS
     shell:
         """
         mkdir -p {QC_DIR}/align
         unset DISPLAY
         qualimap bamqc -bam {input.bam} \
-            --java-mem-size=96G \
+            --java-mem-size=16G \
             -c -ip \
             -outdir {QC_DIR}/align/{wildcards.sample} \
             -outformat HTML \
@@ -404,138 +303,95 @@ rule qualimap:
             -p NON-STRAND-SPECIFIC
         mv {QC_DIR}/align/{wildcards.sample}/genome_results.txt {output.results}
         mv {QC_DIR}/align/{wildcards.sample}/qualimapReport.html {output.html}
-        """
-
-
-rule deepvariant:
-    input:
-        bam=lambda wc: f"{ALIGN_DIR}/{wc.sample}.bqsr.bam",
-        bai=lambda wc: f"{ALIGN_DIR}/{wc.sample}.bqsr.bam.bai",
-    output:
-        vcf=f"{SNV_DIR}/germline/{{sample}}.deepvariant.vcf.gz",
-        gvcf=f"{SNV_DIR}/germline/{{sample}}.deepvariant.g.vcf.gz",
-    threads: THREADS
-    shell:
-        """
-        mkdir -p {SNV_DIR}/germline
-        {DEEPVARIANT_RUN} \
-            --model_type=WGS \
-            --ref {REF} \
-            --reads {input.bam} \
-            --output_vcf {output.vcf} \
-            --output_gvcf {output.gvcf} \
-            --num_shards {threads}
-        """
-
-
-rule bcftools_stats:
-    input:
-        gvcf=f"{SNV_DIR}/germline/{{sample}}.deepvariant.g.vcf.gz",
-    output:
-        f"{QC_DIR}/germline/{{sample}}.germline.bcftools_stats.txt",
-    threads: THREADS
-    shell:
-        """
-        mkdir -p {QC_DIR}/germline
-        bcftools stats {input.gvcf} > {output}
-        """
-
-
-rule gatk_varianteval:
-    input:
-        gvcf=f"{SNV_DIR}/germline/{{sample}}.deepvariant.g.vcf.gz",
-    output:
-        f"{QC_DIR}/germline/{{sample}}.germline.eval.grp",
-    threads: THREADS
-    shell:
-        """
-        mkdir -p {QC_DIR}/germline
-        gatk --java-options '-Xmx12g -XX:ParallelGCThreads=16' VariantEval \
-            -R {REF} \
-            -O {output} \
-            --dbsnp {DBSNP} \
-            --eval {input.gvcf}
+        printf "%s %s\\n" "{rule}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> {OUTDIR}/rule_finish.log
+        notifyme
         """
 
 
 rule mutect2_call:
     input:
-        tumor_bam=lambda wc: f"{ALIGN_DIR}/{tumor_from_pair(wc)}.bqsr.bam",
-        tumor_bai=lambda wc: f"{ALIGN_DIR}/{tumor_from_pair(wc)}.bqsr.bam.bai",
-        normal_bam=lambda wc: f"{ALIGN_DIR}/{normal_from_pair(wc)}.bqsr.bam",
-        normal_bai=lambda wc: f"{ALIGN_DIR}/{normal_from_pair(wc)}.bqsr.bam.bai",
+        tumor_bam=TUMOR_BQSR_BAM,
+        tumor_bai=TUMOR_BQSR_BAI,
+        normal_bam=NORMAL_BQSR_BAM,
+        normal_bai=NORMAL_BQSR_BAI,
     output:
-        vcf=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.mutect2.vcf.gz",
-        f1r2=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.f1r2.tar.gz",
-        stats=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.mutect2.vcf.gz.stats",
+        vcf=os.path.join(PAIR_DIR, PAIR_ID + ".mutect2.vcf.gz"),
+        f1r2=os.path.join(PAIR_DIR, PAIR_ID + ".f1r2.tar.gz"),
+        stats=os.path.join(PAIR_DIR, PAIR_ID + ".mutect2.vcf.gz.stats"),
     threads: THREADS
     shell:
         """
-        mkdir -p {SNV_DIR}/{wildcards.pair}/mutect2
+        mkdir -p {PAIR_DIR}
         gatk Mutect2 \
             --reference {REF} \
             {INTERVALS_ARG} \
             --input {input.tumor_bam} \
             --input {input.normal_bam} \
-            --normal-sample {normal_from_pair(wildcards)} \
-            --tumor-sample {tumor_from_pair(wildcards)} \
+            --normal-sample {NORMAL_SAMPLE} \
+            --tumor-sample {TUMOR_SAMPLE} \
             {GERMLINE_RESOURCE_ARG} \
             {PON_ARG} \
             --output {output.vcf} \
             --f1r2-tar-gz {output.f1r2} \
             --independent-mates
+        printf "%s %s\\n" "{rule}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> {OUTDIR}/rule_finish.log
+        notifyme
         """
 
 
 rule mutect2_pileup_tumor:
     input:
-        bam=lambda wc: f"{ALIGN_DIR}/{tumor_from_pair(wc)}.bqsr.bam",
-        bai=lambda wc: f"{ALIGN_DIR}/{tumor_from_pair(wc)}.bqsr.bam.bai",
+        bam=TUMOR_BQSR_BAM,
+        bai=TUMOR_BQSR_BAI,
     output:
-        f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.tpileup.table",
+        os.path.join(PAIR_DIR, PAIR_ID + ".tpileup.table"),
     threads: THREADS
     shell:
         """
-        mkdir -p {SNV_DIR}/{wildcards.pair}/mutect2
+        mkdir -p {PAIR_DIR}
         gatk --java-options -Xmx48g GetPileupSummaries \
             -I {input.bam} \
             -V {GERMLINE_RESOURCE} \
             {INTERVALS_ARG} \
             -O {output}
+        printf "%s %s\\n" "{rule}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> {OUTDIR}/rule_finish.log
+        notifyme
         """
 
 
 rule mutect2_pileup_normal:
     input:
-        bam=lambda wc: f"{ALIGN_DIR}/{normal_from_pair(wc)}.bqsr.bam",
-        bai=lambda wc: f"{ALIGN_DIR}/{normal_from_pair(wc)}.bqsr.bam.bai",
+        bam=NORMAL_BQSR_BAM,
+        bai=NORMAL_BQSR_BAI,
     output:
-        f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.npileup.table",
+        os.path.join(PAIR_DIR, PAIR_ID + ".npileup.table"),
     threads: THREADS
     shell:
         """
-        mkdir -p {SNV_DIR}/{wildcards.pair}/mutect2
+        mkdir -p {PAIR_DIR}
         gatk --java-options -Xmx48g GetPileupSummaries \
             -I {input.bam} \
             -V {GERMLINE_RESOURCE} \
             {INTERVALS_ARG} \
             -O {output}
+        printf "%s %s\\n" "{rule}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> {OUTDIR}/rule_finish.log
+        notifyme
         """
 
 
 rule mutect2_contamination:
     input:
-        tumor_pileup=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.tpileup.table",
-        normal_pileup=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.npileup.table",
+        tumor_pileup=os.path.join(PAIR_DIR, PAIR_ID + ".tpileup.table"),
+        normal_pileup=os.path.join(PAIR_DIR, PAIR_ID + ".npileup.table"),
     output:
-        tumor_all=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.allpileups.table",
-        normal_all=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.normal.allpileups.table",
-        tumor_contam=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.contamination.table",
-        normal_contam=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.normal.contamination.table",
+        tumor_all=os.path.join(PAIR_DIR, PAIR_ID + ".allpileups.table"),
+        normal_all=os.path.join(PAIR_DIR, PAIR_ID + ".normal.allpileups.table"),
+        tumor_contam=os.path.join(PAIR_DIR, PAIR_ID + ".contamination.table"),
+        normal_contam=os.path.join(PAIR_DIR, PAIR_ID + ".normal.contamination.table"),
     threads: THREADS
     shell:
         """
-        mkdir -p {SNV_DIR}/{wildcards.pair}/mutect2
+        mkdir -p {PAIR_DIR}
         gatk GatherPileupSummaries \
             --sequence-dictionary {REF_DICT} \
             -I {input.tumor_pileup} \
@@ -554,59 +410,65 @@ rule mutect2_contamination:
         gatk CalculateContamination \
             -I {output.normal_all} \
             -O {output.normal_contam}
+        printf "%s %s\\n" "{rule}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> {OUTDIR}/rule_finish.log
+        notifyme
         """
 
 
 rule mutect2_read_orientation:
     input:
-        f1r2=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.f1r2.tar.gz",
+        f1r2=os.path.join(PAIR_DIR, PAIR_ID + ".f1r2.tar.gz"),
     output:
-        f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.read-orientation-model.tar.gz",
+        os.path.join(PAIR_DIR, PAIR_ID + ".read-orientation-model.tar.gz"),
     threads: THREADS
     shell:
         """
-        mkdir -p {SNV_DIR}/{wildcards.pair}/mutect2
+        mkdir -p {PAIR_DIR}
         gatk LearnReadOrientationModel \
             --output {output} \
             --input {input.f1r2}
+        printf "%s %s\\n" "{rule}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> {OUTDIR}/rule_finish.log
+        notifyme
         """
 
 
 rule mutect2_merge_stats:
     input:
-        stats=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.mutect2.vcf.gz.stats",
+        stats=os.path.join(PAIR_DIR, PAIR_ID + ".mutect2.vcf.gz.stats"),
     output:
-        f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.final.stats",
+        os.path.join(PAIR_DIR, PAIR_ID + ".final.stats"),
     threads: THREADS
     shell:
         """
-        mkdir -p {SNV_DIR}/{wildcards.pair}/mutect2
+        mkdir -p {PAIR_DIR}
         gatk MergeMutectStats \
             --stats {input.stats} \
             -O {output}
+        printf "%s %s\\n" "{rule}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> {OUTDIR}/rule_finish.log
+        notifyme
         """
 
 
 rule mutect2_filter:
     input:
-        vcf=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.mutect2.vcf.gz",
-        stats=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.final.stats",
-        orientation=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.read-orientation-model.tar.gz",
-        tumor_contam=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.contamination.table",
+        vcf=os.path.join(PAIR_DIR, PAIR_ID + ".mutect2.vcf.gz"),
+        stats=os.path.join(PAIR_DIR, PAIR_ID + ".final.stats"),
+        orientation=os.path.join(PAIR_DIR, PAIR_ID + ".read-orientation-model.tar.gz"),
+        tumor_contam=os.path.join(PAIR_DIR, PAIR_ID + ".contamination.table"),
     output:
-        marked=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.mutect2.marked.vcf.gz",
-        marked_tbi=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.mutect2.marked.vcf.gz.tbi",
-        norm=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.mutect2.norm.vcf.gz",
-        norm_tbi=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.mutect2.norm.vcf.gz.tbi",
-        filter_stats=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.mutect2.marked.vcf.gz.filteringStats.tsv",
+        marked=os.path.join(PAIR_DIR, PAIR_ID + ".mutect2.marked.vcf.gz"),
+        marked_tbi=os.path.join(PAIR_DIR, PAIR_ID + ".mutect2.marked.vcf.gz.tbi"),
+        norm=os.path.join(PAIR_DIR, PAIR_ID + ".mutect2.norm.vcf.gz"),
+        norm_tbi=os.path.join(PAIR_DIR, PAIR_ID + ".mutect2.norm.vcf.gz.tbi"),
+        filter_stats=os.path.join(PAIR_DIR, PAIR_ID + ".mutect2.marked.vcf.gz.filteringStats.tsv"),
     threads: THREADS
     shell:
         """
-        mkdir -p {SNV_DIR}/{wildcards.pair}/mutect2
-        gatk SortVcf -I {input.vcf} -O {SNV_DIR}/{wildcards.pair}/mutect2/{wildcards.pair}.mutect2.concat.vcf.gz --CREATE_INDEX
+        mkdir -p {PAIR_DIR}
+        gatk SortVcf -I {input.vcf} -O {PAIR_DIR}/{PAIR_ID}.mutect2.concat.vcf.gz --CREATE_INDEX
         gatk FilterMutectCalls \
             -R {REF} \
-            -V {SNV_DIR}/{wildcards.pair}/mutect2/{wildcards.pair}.mutect2.concat.vcf.gz \
+            -V {PAIR_DIR}/{PAIR_ID}.mutect2.concat.vcf.gz \
             --ob-priors {input.orientation} \
             --contamination-table {input.tumor_contam} \
             --stats {input.stats} \
@@ -615,138 +477,107 @@ rule mutect2_filter:
             -R {REF} \
             --variant {output.marked} \
             --exclude-filtered \
-            --output {SNV_DIR}/{wildcards.pair}/mutect2/{wildcards.pair}.mutect2.final.vcf.gz
-        bcftools sort {SNV_DIR}/{wildcards.pair}/mutect2/{wildcards.pair}.mutect2.final.vcf.gz | \
+            --output {PAIR_DIR}/{PAIR_ID}.mutect2.final.vcf.gz
+        bcftools sort {PAIR_DIR}/{PAIR_ID}.mutect2.final.vcf.gz | \
             bcftools norm --threads {threads} --check-ref s -f {REF} -O v | \
             awk '{{gsub(/\\y[W|K|Y|R|S|M|B|D|H|V]\\y/,"N",$4); OFS = "\t"; print}}' | \
             sed '/^$/d' | \
             bcftools view - -Oz -o {output.norm}
         bcftools index -t {output.norm}
+        printf "%s %s\\n" "{rule}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> {OUTDIR}/rule_finish.log
+        notifyme
         """
 
 
 rule manta:
     input:
-        tumor_bam=lambda wc: f"{ALIGN_DIR}/{tumor_from_pair(wc)}.bqsr.bam",
-        normal_bam=lambda wc: f"{ALIGN_DIR}/{normal_from_pair(wc)}.bqsr.bam",
+        tumor_bam=TUMOR_BQSR_BAM,
+        normal_bam=NORMAL_BQSR_BAM,
     output:
-        vcf=f"{SV_DIR}/{{pair}}/manta/{{pair}}.somaticSV.vcf.gz",
-        tbi=f"{SV_DIR}/{{pair}}/manta/{{pair}}.somaticSV.vcf.gz.tbi",
+        vcf=os.path.join(MANTA_DIR, PAIR_ID + ".somaticSV.vcf.gz"),
+        tbi=os.path.join(MANTA_DIR, PAIR_ID + ".somaticSV.vcf.gz.tbi"),
     threads: THREADS
     shell:
         """
-        mkdir -p {SV_DIR}/{wildcards.pair}/manta/run
-        {MANTA_CONFIG} \
+        MANTA_CONFIG="$(command -v configManta.py)"
+        MANTA_CONFIG="$(readlink -f "${{MANTA_CONFIG}}")"
+        export PYTHONPATH="$(dirname "${{MANTA_CONFIG}}")${{PYTHONPATH:+:${{PYTHONPATH}}}}"
+        mkdir -p {MANTA_DIR}/run
+        "${{MANTA_CONFIG}}" \
             --tumorBam {input.tumor_bam} \
             --normalBam {input.normal_bam} \
             --referenceFasta {REF} \
-            --runDir {SV_DIR}/{wildcards.pair}/manta/run
-        {SV_DIR}/{wildcards.pair}/manta/run/runWorkflow.py -m local -j {threads}
-        cp {SV_DIR}/{wildcards.pair}/manta/run/results/variants/somaticSV.vcf.gz {output.vcf}
-        cp {SV_DIR}/{wildcards.pair}/manta/run/results/variants/somaticSV.vcf.gz.tbi {output.tbi}
+            --runDir {MANTA_DIR}/run
+        {MANTA_DIR}/run/runWorkflow.py -m local -j {threads}
+        cp {MANTA_DIR}/run/results/variants/somaticSV.vcf.gz {output.vcf}
+        cp {MANTA_DIR}/run/results/variants/somaticSV.vcf.gz.tbi {output.tbi}
+        printf "%s %s\\n" "{rule}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> {OUTDIR}/rule_finish.log
+        notifyme
         """
 
 
 rule cnvkit_batch:
     input:
-        tumor_bam=lambda wc: f"{ALIGN_DIR}/{tumor_from_pair(wc)}.bqsr.bam",
-        normal_bam=lambda wc: f"{ALIGN_DIR}/{normal_from_pair(wc)}.bqsr.bam",
+        tumor_bam=TUMOR_BQSR_BAM,
+        normal_bam=NORMAL_BQSR_BAM,
     output:
-        cnr=lambda wc: f"{CNV_DIR}/{wc.pair}/cnvkit/{cnvkit_prefix(wc)}.cnr",
-        cns=lambda wc: f"{CNV_DIR}/{wc.pair}/cnvkit/{cnvkit_prefix(wc)}.cns",
-        pair_cns=f"{CNV_DIR}/{{pair}}/cnvkit/{{pair}}.cns",
+        pair_cns=os.path.join(CNVKIT_DIR, PAIR_ID + ".cns"),
     threads: THREADS
     shell:
         """
-        mkdir -p {CNV_DIR}/{wildcards.pair}/cnvkit
+        mkdir -p {CNVKIT_DIR}
         cnvkit.py batch \
             {input.tumor_bam} -n {input.normal_bam} \
             -f {REF} \
             -m wgs \
             --access {CNVKIT_ACCESS} \
-            --output-reference {CNV_DIR}/{wildcards.pair}/cnvkit/{wildcards.pair}.cnn \
-            --output-dir {CNV_DIR}/{wildcards.pair}/cnvkit
-        cp {CNV_DIR}/{wildcards.pair}/cnvkit/{cnvkit_prefix(wildcards)}.cns {output.pair_cns}
-        """
-
-
-rule vcf2maf_mutect2:
-    input:
-        vcf=f"{SNV_DIR}/{{pair}}/mutect2/{{pair}}.mutect2.norm.vcf.gz",
-    output:
-        maf=f"{ANNOT_DIR}/{{pair}}/mutect2/{{pair}}.maf",
-    threads: THREADS
-    shell:
-        """
-        mkdir -p {ANNOT_DIR}/{wildcards.pair}/mutect2
-        zcat {input.vcf} > {ANNOT_DIR}/{wildcards.pair}/mutect2/{wildcards.pair}.mutect2.norm.vcf
-        {VCF2MAF} \
-            --input-vcf {ANNOT_DIR}/{wildcards.pair}/mutect2/{wildcards.pair}.mutect2.norm.vcf \
-            --output-maf {output.maf} \
-            --tumor-id {tumor_from_pair(wildcards)} \
-            --normal-id {normal_from_pair(wildcards)} \
-            --vep-path /opt/vep/src/ensembl-vep \
-            --vep-data {VEP_CACHE} \
-            --ncbi-build {VEP_BUILD} \
-            --species {VEP_SPECIES} \
-            --ref-fasta {REF} \
-            --vep-forks {threads} \
-            --retain-info "set" \
-            --vep-overwrite
+            --output-reference {CNVKIT_DIR}/{PAIR_ID}.cnn \
+            --output-dir {CNVKIT_DIR}
+        cp {CNVKIT_DIR}/{CNVKIT_PREFIX}.cns {output.pair_cns}
+        printf "%s %s\\n" "{rule}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> {OUTDIR}/rule_finish.log
+        notifyme
         """
 
 
 rule multiqc:
     input:
         fastqc=expand(
-            f"{QC_DIR}/fastqc/{{sample}}.R1.trimmed_fastqc.zip",
-            sample=SAMPLE_LIST,
+            os.path.join(QC_DIR, "fastqc", "{sample}.R1.trimmed_fastqc.zip"),
+            sample=SAMPLES,
         ) + expand(
-            f"{QC_DIR}/fastqc/{{sample}}.R2.trimmed_fastqc.zip",
-            sample=SAMPLE_LIST,
+            os.path.join(QC_DIR, "fastqc", "{sample}.R2.trimmed_fastqc.zip"),
+            sample=SAMPLES,
         ),
         fastq_screen=expand(
-            f"{QC_DIR}/fastq_screen/{{sample}}.R1.trimmed_screen.txt",
-            sample=SAMPLE_LIST,
+            os.path.join(QC_DIR, "fastq_screen", "{sample}.R1.trimmed_screen.txt"),
+            sample=SAMPLES,
         ) + expand(
-            f"{QC_DIR}/fastq_screen/{{sample}}.R2.trimmed_screen.txt",
-            sample=SAMPLE_LIST,
+            os.path.join(QC_DIR, "fastq_screen", "{sample}.R2.trimmed_screen.txt"),
+            sample=SAMPLES,
         ),
         kraken=expand(
-            f"{QC_DIR}/kraken/{{sample}}.trimmed.kraken_bacteria.taxa.txt",
-            sample=SAMPLE_LIST,
+            os.path.join(QC_DIR, "kraken", "{sample}.trimmed.kraken_bacteria.taxa.txt"),
+            sample=SAMPLES,
         ),
         flagstat=expand(
-            f"{QC_DIR}/align/{{sample}}.samtools_flagstat.txt",
-            sample=SAMPLE_LIST,
+            os.path.join(QC_DIR, "align", "{sample}.samtools_flagstat.txt"),
+            sample=SAMPLES,
         ),
         mosdepth=expand(
-            f"{QC_DIR}/align/{{sample}}.mosdepth.summary.txt",
-            sample=SAMPLE_LIST,
+            os.path.join(QC_DIR, "align", "{sample}.mosdepth.summary.txt"),
+            sample=SAMPLES,
         ),
         qualimap=expand(
-            f"{QC_DIR}/align/{{sample}}_genome_results.txt",
-            sample=SAMPLE_LIST,
-        ),
-        germline_stats=maybe(
-            ENABLE_GERMLINE,
-            expand(
-                f"{QC_DIR}/germline/{{sample}}.germline.bcftools_stats.txt",
-                sample=NORMAL_SAMPLES,
-            ),
-        ),
-        germline_eval=maybe(
-            ENABLE_GERMLINE,
-            expand(
-                f"{QC_DIR}/germline/{{sample}}.germline.eval.grp",
-                sample=NORMAL_SAMPLES,
-            ),
+            os.path.join(QC_DIR, "align", "{sample}_genome_results.txt"),
+            sample=SAMPLES,
         ),
     output:
-        f"{MULTIQC_DIR}/multiqc_report.html",
+        os.path.join(MULTIQC_DIR, "multiqc_report.html"),
     threads: THREADS
     shell:
         """
         mkdir -p {MULTIQC_DIR}
         {MULTIQC_BIN} {OUTDIR} -o {MULTIQC_DIR}
+        printf "%s %s\\n" "{rule}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> {OUTDIR}/rule_finish.log
+        notifyme
         """
