@@ -53,3 +53,16 @@ replay_pid*
 
 /submit_slurm.sh
 /tmp/
+
+# Project-specific
+*.fq.gz
+resources/
+tmp/
+simple/tmp/
+pairs.tsv
+samples.tsv
+results/
+.snakemake/
+tmp.txt
+tasks.md
+simple/config.json

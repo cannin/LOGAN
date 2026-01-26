@@ -1,18 +1,22 @@
+import json
 import os
 
 shell.executable("/bin/bash")
 shell.prefix("set -euo pipefail; ")
 
 BASE_DIR = os.path.abspath(os.getcwd())
+SNAKEFILE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_JSON = os.environ.get("CONFIG_JSON", os.path.join(SNAKEFILE_DIR, "config.json"))
+with open(CONFIG_JSON) as handle:
+    CONFIG = json.load(handle)
 OUTDIR = os.path.join(BASE_DIR, "results")
 THREADS = 8
 TMPDIR = os.path.join(BASE_DIR, "tmp")
 
-TUMOR_SAMPLE = "CUACC327_PDX_WGS_E250051196_L01_82"
-NORMAL_SAMPLE = "CU327_human_blood_WGS_E250056942_L01_61"
+TUMOR_SAMPLE = CONFIG["TUMOR_SAMPLE"]
+NORMAL_SAMPLE = CONFIG["NORMAL_SAMPLE"]
+PAIR_ID = CONFIG["PAIR_ID"]
 SAMPLES = [TUMOR_SAMPLE, NORMAL_SAMPLE]
-
-PAIR_ID = "CUACC327_PDX_WGS_E250051196_L01_82_vs_CU327_human_blood_WGS_E250056942_L01_61"
 
 ruleorder: apply_bqsr > bwa_mem2_align
 
