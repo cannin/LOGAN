@@ -45,7 +45,7 @@ These are listed here so you can expand the pipeline while keeping version parit
 ## Files in this folder
 
 - `Snakefile`: pipeline logic
-- `config.yaml`: inputs and reference paths
+- `config.json`: inputs and reference paths
 - `samples.tsv.example`: template for FASTQ inputs
 - `pairs.tsv.example`: template for tumor/normal pairs
 - `install.sh`: installs tools (LOGAN-matched versions)
@@ -68,7 +68,7 @@ cp pairs.tsv.example pairs.tsv
 Notes:
 - `samples.tsv` and `pairs.tsv` should not include header rows.
 
-3. **Update `config.yaml`** with real paths:
+3. **Update `config.json`** with real paths:
    - `reference.genome_fasta`, `reference.known_sites`, `reference.germline_resource`, `reference.panel_of_normals`
    - `reference.fastq_screen_conf`, `reference.kraken_db`, `reference.cnvkit_access`
    - Toggle steps with `enable.qc`, `enable.germline`, `enable.sv`, `enable.cnv`, `enable.annotation`
@@ -85,7 +85,7 @@ Optional dry-run:
 snakemake -n
 ```
 
-## Optional features (toggle in `config.yaml`)
+## Optional features (toggle in `config.json`)
 
 - `enable.germline: true` uses **DeepVariant 1.6.1** (LOGAN container version). Provide `tools.deepvariant_run` or install DeepVariant separately.
 - `enable.annotation: true` uses **vcf2maf 102.0.0 + VEP**. Provide `tools.vcf2maf` and VEP cache paths.

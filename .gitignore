@@ -65,3 +65,4 @@ results/
 .snakemake/
 tmp.txt
 tasks.md
+simple/config.json
