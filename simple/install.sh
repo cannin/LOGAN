@@ -55,11 +55,16 @@ if [ -n "${APT_GET}" ]; then
   git \
   libbz2-dev \
   libcurl4-openssl-dev \
+  libdbd-mysql-perl \
+  libdbi-perl \
   libdeflate-dev \
   libgd-perl \
   libgd-graph-perl \
   libisal-dev \
   libffi-dev \
+  liblist-moreutils-perl \
+  libmodule-build-perl \
+  libwww-perl \
   libsqlite3-dev \
   liblzma-dev \
   libncurses5-dev \
@@ -116,6 +121,8 @@ rm -rf htslib-1.20
 tar -xjf htslib-1.20.tar.bz2
 cd htslib-1.20
 make -j"$(nproc)"
+ln -sf "${TMP_DIR}/htslib-1.20/tabix" "${BIN_DIR}/tabix"
+ln -sf "${TMP_DIR}/htslib-1.20/bgzip" "${BIN_DIR}/bgzip"
 
 cd "${TMP_DIR}"
 wget -q https://github.com/samtools/samtools/releases/download/1.20/samtools-1.20.tar.bz2
@@ -241,6 +248,61 @@ else
 fi
 ln -sf "${TMP_DIR}/vcf2maf/vcf2maf.pl" "${BIN_DIR}/vcf2maf.pl"
 ln -sf "${TMP_DIR}/vcf2maf/vcf2maf.pl" "${BIN_DIR}/vcf2maf"
+
+# VEP (needed for vcf2maf; installs local cache under tmp/vep_cache)
+VEP_TAG="${VEP_TAG:-release/115.0}"
+VEP_CACHE_VERSION="${VEP_CACHE_VERSION:-115}"
+VEP_DIR="${TMP_DIR}/vep"
+VEP_CACHE_DIR="${TMP_DIR}/vep_cache"
+VEP_API_DIR="${TMP_DIR}/vep_api"
+mkdir -p "${VEP_API_DIR}"
+if [ ! -x "${VEP_DIR}/vep" ] && [ ! -x "${VEP_DIR}/variant_effect_predictor.pl" ]; then
+  cd "${TMP_DIR}"
+  VEP_TARBALL="ensembl-vep-${VEP_TAG//\//-}.tar.gz"
+  if [ ! -s "${VEP_TARBALL}" ]; then
+    rm -f "${VEP_TARBALL}"
+    curl -L -o "${VEP_TARBALL}" "https://github.com/Ensembl/ensembl-vep/archive/refs/tags/${VEP_TAG}.tar.gz"
+  fi
+  if [ ! -s "${VEP_TARBALL}" ]; then
+    echo "Failed to download VEP tarball for tag ${VEP_TAG}." >&2
+    exit 1
+  fi
+  rm -rf "${VEP_DIR}"
+  mkdir -p "${VEP_DIR}"
+  tar -xzf "${VEP_TARBALL}" -C "${VEP_DIR}" --strip-components=1
+  cd "${VEP_DIR}"
+  perl INSTALL.pl \
+    --AUTO a \
+    --NO_UPDATE \
+    --NO_TEST \
+    --DESTDIR "${VEP_API_DIR}"
+fi
+if [ ! -f "${VEP_API_DIR}/Bio/EnsEMBL/Registry.pm" ]; then
+  cd "${VEP_DIR}"
+  perl INSTALL.pl \
+    --AUTO a \
+    --NO_UPDATE \
+    --NO_TEST \
+    --DESTDIR "${VEP_API_DIR}"
+fi
+if [ ! -d "${VEP_CACHE_DIR}/homo_sapiens" ]; then
+  mkdir -p "${VEP_CACHE_DIR}"
+  cd "${VEP_DIR}"
+  perl INSTALL.pl \
+    --AUTO c \
+    --NO_UPDATE \
+    --DESTDIR "${VEP_API_DIR}" \
+    --CACHEDIR "${VEP_CACHE_DIR}" \
+    --SPECIES homo_sapiens \
+    --ASSEMBLY GRCh38 \
+    --CACHE_VERSION "${VEP_CACHE_VERSION}"
+fi
+if [ -x "${VEP_DIR}/vep" ]; then
+  ln -sf "${VEP_DIR}/vep" "${BIN_DIR}/vep"
+fi
+if [ -x "${VEP_DIR}/variant_effect_predictor.pl" ]; then
+  ln -sf "${VEP_DIR}/variant_effect_predictor.pl" "${BIN_DIR}/variant_effect_predictor.pl"
+fi
 
 # Step 7: Create a python venv and install python-based tools.
 # CNVkit (LOGAN CNV container uses a git clone without a pinned version)

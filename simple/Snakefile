@@ -73,6 +73,11 @@ KNOWN_SITES_ARGS = " ".join(
 INTERVALS_ARG = "--intervals " + INTERVALS
 GERMLINE_RESOURCE_ARG = "--germline-resource " + GERMLINE_RESOURCE
 PON_ARG = "--panel-of-normals " + PON
+VEP_DIR = os.path.join(TMPDIR, "vep")
+VEP_CACHE_DIR = os.path.join(TMPDIR, "vep_cache")
+VEP_API_DIR = os.path.join(TMPDIR, "vep_api")
+VEP_CACHE_VERSION = "115"
+VCF2MAF_BIN = "vcf2maf.pl"
 
 
 rule all:
@@ -81,6 +86,7 @@ rule all:
         expand(os.path.join(ALIGN_DIR, "{sample}.bqsr.bam.bai"), sample=SAMPLES),
         os.path.join(PAIR_DIR, PAIR_ID + ".mutect2.norm.vcf.gz"),
         os.path.join(PAIR_DIR, PAIR_ID + ".mutect2.norm.vcf.gz.tbi"),
+        os.path.join(PAIR_DIR, PAIR_ID + ".mutect2.norm.maf"),
         os.path.join(MANTA_DIR, PAIR_ID + ".somaticSV.vcf.gz"),
         os.path.join(MANTA_DIR, PAIR_ID + ".somaticSV.vcf.gz.tbi"),
         os.path.join(CNVKIT_DIR, PAIR_ID + ".cns"),
@@ -489,6 +495,40 @@ rule mutect2_filter:
             sed '/^$/d' | \
             bcftools view - -Oz -o {output.norm}
         bcftools index -t {output.norm}
+        printf "%s %s\\n" "{rule}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> {OUTDIR}/rule_finish.log
+        notifyme
+        """
+
+
+rule vcf2maf:
+    input:
+        vcf=os.path.join(PAIR_DIR, PAIR_ID + ".mutect2.norm.vcf.gz"),
+        tbi=os.path.join(PAIR_DIR, PAIR_ID + ".mutect2.norm.vcf.gz.tbi"),
+    output:
+        maf=os.path.join(PAIR_DIR, PAIR_ID + ".mutect2.norm.maf"),
+    threads: THREADS
+    shell:
+        """
+        mkdir -p {PAIR_DIR}
+        mkdir -p {TMPDIR}/vcf2maf_{PAIR_ID}
+        VCF_UNZIPPED="{TMPDIR}/vcf2maf_{PAIR_ID}/{PAIR_ID}.mutect2.norm.vcf"
+        if [ ! -s "$VCF_UNZIPPED" ]; then
+            gzip -cd {input.vcf} > "$VCF_UNZIPPED"
+        fi
+        export PERL5LIB="{VEP_API_DIR}${{PERL5LIB:+:$PERL5LIB}}"
+        {VCF2MAF_BIN} \
+            --input-vcf "$VCF_UNZIPPED" \
+            --output-maf {output.maf} \
+            --tumor-id {TUMOR_SAMPLE} \
+            --normal-id {NORMAL_SAMPLE} \
+            --vcf-tumor-id {TUMOR_SAMPLE} \
+            --vcf-normal-id {NORMAL_SAMPLE} \
+            --ncbi-build GRCh38 \
+            --ref-fasta {REF} \
+            --vep-path {VEP_DIR} \
+            --vep-data {VEP_CACHE_DIR} \
+            --cache-version {VEP_CACHE_VERSION} \
+            --tmp-dir {TMPDIR}/vcf2maf_{PAIR_ID}
         printf "%s %s\\n" "{rule}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> {OUTDIR}/rule_finish.log
         notifyme
         """
