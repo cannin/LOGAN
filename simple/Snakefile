@@ -10,7 +10,7 @@ CONFIG_JSON = os.environ.get("CONFIG_JSON", os.path.join(SNAKEFILE_DIR, "config.
 with open(CONFIG_JSON) as handle:
     CONFIG = json.load(handle)
 OUTDIR = os.path.join(BASE_DIR, "results")
-THREADS = 8
+THREADS = 30
 TMPDIR = os.path.join(BASE_DIR, "tmp")
 
 TUMOR_SAMPLE = CONFIG["TUMOR_SAMPLE"]
@@ -297,6 +297,7 @@ rule qualimap:
         """
         mkdir -p {QC_DIR}/align
         unset DISPLAY
+        export JAVA_OPTS="-Xms32m -Xmx16G"
         qualimap bamqc -bam {input.bam} \
             --java-mem-size=16G \
             -c -ip \
@@ -534,6 +535,7 @@ rule cnvkit_batch:
             {input.tumor_bam} -n {input.normal_bam} \
             -f {REF} \
             -m wgs \
+            --segment-method haar \
             --access {CNVKIT_ACCESS} \
             --output-reference {CNVKIT_DIR}/{PAIR_ID}.cnn \
             --output-dir {CNVKIT_DIR}
