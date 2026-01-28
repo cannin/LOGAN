@@ -232,6 +232,16 @@ wget -q https://github.com/Illumina/manta/releases/download/v1.6.0/manta-1.6.0.c
 tar -xjf manta-1.6.0.centos6_x86_64.tar.bz2
 ln -sf "${TMP_DIR}/manta-1.6.0.centos6_x86_64/bin/configManta.py" "${BIN_DIR}/configManta.py"
 
+# vcf2maf (annotation helper; requires VEP cache/config at runtime)
+cd "${TMP_DIR}"
+if [ ! -d "vcf2maf" ]; then
+  git clone https://github.com/mskcc/vcf2maf.git
+else
+  (cd vcf2maf && git fetch --all --prune)
+fi
+ln -sf "${TMP_DIR}/vcf2maf/vcf2maf.pl" "${BIN_DIR}/vcf2maf.pl"
+ln -sf "${TMP_DIR}/vcf2maf/vcf2maf.pl" "${BIN_DIR}/vcf2maf"
+
 # Step 7: Create a python venv and install python-based tools.
 # CNVkit (LOGAN CNV container uses a git clone without a pinned version)
 cd "${TMP_DIR}"
