@@ -6,7 +6,7 @@ This folder provides a **local, single-host WGS pipeline** in Snakemake that mir
 
 1. **QC on raw reads**
    - `fastp` trimming + reports
-   - `fastqc`, `fastq_screen`, `kraken2` (optional, but enabled in config)
+   - `fastqc`, `fastq_screen`, `kraken2` (optional, but enabled by default)
 
 2. **Alignment + post-processing**
    - `bwa-mem2` alignment
@@ -45,9 +45,7 @@ These are listed here so you can expand the pipeline while keeping version parit
 ## Files in this folder
 
 - `Snakefile`: pipeline logic
-- `config.json`: inputs and reference paths
-- `samples.tsv.example`: template for FASTQ inputs
-- `pairs.tsv.example`: template for tumor/normal pairs
+- `config.json`: sample IDs
 - `install.sh`: installs tools (LOGAN-matched versions)
 
 ## Setup
@@ -58,20 +56,22 @@ These are listed here so you can expand the pipeline while keeping version parit
 bash install.sh
 ```
 
-2. **Prepare input tables** (copy and edit):
+2. **Place input FASTQs** in this folder:
+   - `{sample}_1.fq.gz` and `{sample}_2.fq.gz`
+   - `{sample}` must match `TUMOR_SAMPLE` and `NORMAL_SAMPLE` in `config.json`
 
-```bash
-cp samples.tsv.example samples.tsv
-cp pairs.tsv.example pairs.tsv
+3. **Update `config.json`** with sample IDs:
+   - `TUMOR_SAMPLE`, `NORMAL_SAMPLE`, `PAIR_ID`
+
+`config.json` format (example):
+
+```json
+{
+  "TUMOR_SAMPLE": "PTX901_T_wgs_lane1",
+  "NORMAL_SAMPLE": "PTX901_N_blood_wgs_lane1",
+  "PAIR_ID": "PTX901_T_vs_PTX901_N"
+}
 ```
-
-Notes:
-- `samples.tsv` and `pairs.tsv` should not include header rows.
-
-3. **Update `config.json`** with real paths:
-   - `reference.genome_fasta`, `reference.known_sites`, `reference.germline_resource`, `reference.panel_of_normals`
-   - `reference.fastq_screen_conf`, `reference.kraken_db`, `reference.cnvkit_access`
-   - Toggle steps with `enable.qc`, `enable.germline`, `enable.sv`, `enable.cnv`, `enable.annotation`
 
 ## Run (local)
 
@@ -85,10 +85,9 @@ Optional dry-run:
 snakemake -n
 ```
 
-## Optional features (toggle in `config.json`)
+## Optional features
 
-- `enable.germline: true` uses **DeepVariant 1.6.1** (LOGAN container version). Provide `tools.deepvariant_run` or install DeepVariant separately.
-- `enable.annotation: true` uses **vcf2maf 102.0.0 + VEP**. Provide `tools.vcf2maf` and VEP cache paths.
+- DeepVariant and annotation callers are not wired in this Snakefile. Add them if you want a broader LOGAN-style caller set.
 
 ## Output layout (default)
 
@@ -130,4 +129,4 @@ CNVkit is installed from the upstream git repo, matching LOGAN's CNV container b
 - The Mutect2 path here is the closest to LOGAN's tumor/normal best practice. It includes contamination modeling and read-orientation bias steps.
 - Keep reference files consistent (same build for fasta, known-sites, germline resources, PON).
 - `fastq_screen` needs a Bowtie2-based `fastq_screen.conf` with valid genome indexes.
-- `kraken2` needs a pre-built database pointed to by `reference.kraken_db`.
+- `kraken2` needs a pre-built database at `resources/hg38/kraken_db` (adjust the Snakefile if you store it elsewhere).
